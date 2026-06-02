@@ -252,6 +252,10 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             // anterior del envelope.
             adsr1.noteOn();
             adsr2.noteOn();
+
+            // Publicar la nota activa para que la GUI pueda iluminar la tecla.
+            // La escritura atomica es segura desde el hilo de audio.
+            lastMidiNote.store (message.getNoteNumber());
         }
         else if (message.isNoteOff())
         {
@@ -263,6 +267,9 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             // adsr.isActive() devuelve false.
             adsr1.noteOff();
             adsr2.noteOff();
+
+            // Indicar a la GUI que no hay nota activa (-1 = sin nota).
+            lastMidiNote.store (-1);
         }
         else if (message.isAllNotesOff())
         {
@@ -273,6 +280,9 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             osc2Phase       = 0.0;
             adsr1.reset();
             adsr2.reset();
+
+            // Apagar indicador visual del teclado
+            lastMidiNote.store (-1);
         }
     }
 

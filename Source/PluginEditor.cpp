@@ -3,7 +3,8 @@
     PluginEditor.cpp
 
     Construye, estiliza, posiciona y conecta todos los controles de la GUI.
-    La ventana tiene 820 x 440 pixeles con dos paneles de oscilador lado a lado.
+    La ventana tiene 820 x 560 pixeles: dos paneles de oscilador en la parte
+    superior y un teclado de piano animado en la parte inferior.
   ==============================================================================
 */
 
@@ -173,10 +174,10 @@ FractalisAudioProcessorEditor::FractalisAudioProcessorEditor (FractalisAudioProc
         audioProcessor.apvts, "osc2WaveType", osc2WaveCombo);
 
     setupLabel (osc2VolumeLabel,  "VOL");
-    setupLabel (osc2AttackLabel,  "ATK");
-    setupLabel (osc2DecayLabel,   "DCY");
-    setupLabel (osc2SustainLabel, "SUS");
-    setupLabel (osc2ReleaseLabel, "REL");
+    setupLabel (osc2AttackLabel,  "ATTACK");
+    setupLabel (osc2DecayLabel,   "DECAY");
+    setupLabel (osc2SustainLabel, "SUSTAIN");
+    setupLabel (osc2ReleaseLabel, "RELEASE");
 
     setupKnob (osc2VolumeSlider);
     setupKnob (osc2AttackSlider);
@@ -195,10 +196,30 @@ FractalisAudioProcessorEditor::FractalisAudioProcessorEditor (FractalisAudioProc
     osc2ReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         audioProcessor.apvts, "osc2Release", osc2ReleaseSlider);
 
-    setSize (820, 440);
+    // =========================================================================
+    // TECLADO DE PIANO
+    //
+    // Se agrega al editor como componente hijo. El timer se encarga de
+    // leer lastMidiNote del procesador y llamar setActiveNote() para
+    // actualizar la visualizacion sin tocar el hilo de audio.
+    // =========================================================================
+    addAndMakeVisible (pianoDisplay);
+
+    // Timer a ~33fps: suficiente para animacion fluida sin consumir CPU.
+    // El intervalo de 30ms es mucho mayor que el buffer de audio (~3ms),
+    // por lo que nunca interfiere con el procesamiento de audio.
+    startTimerHz (33);
+
+    // La ventana crece 120px en altura para alojar el teclado en la parte inferior
+    setSize (820, 560);
 }
 
-FractalisAudioProcessorEditor::~FractalisAudioProcessorEditor() {}
+FractalisAudioProcessorEditor::~FractalisAudioProcessorEditor()
+{
+    // Detener el timer antes de que se destruya el objeto para evitar
+    // callbacks sobre memoria liberada
+    stopTimer();
+}
 
 //==============================================================================
 // PAINT
@@ -225,20 +246,48 @@ void FractalisAudioProcessorEditor::paint (juce::Graphics& g)
     g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
     g.drawFittedText ("FRACTALIS", 0, 0, getWidth(), 36, juce::Justification::centred, 1);
 
+    // Subtitulo
+    g.setColour (FractalisColors::textSecond);
+    g.setFont (juce::FontOptions (9.0f));
+    g.drawText ("SYNTHESIZER v0.1", 0, 33, getWidth(), 13, juce::Justification::centred);
+
     const int halfW = getWidth() / 2;
 
     // Panel de fondo OSC 1
     g.setColour (FractalisColors::panel);
-    g.fillRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), (float)(getHeight() - 67), 6.0f);
+    g.fillRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f);
     g.setColour (FractalisColors::separator);
-    g.drawRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), (float)(getHeight() - 67), 6.0f, 1.0f);
+    g.drawRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f, 1.0f);
 
     // Panel de fondo OSC 2
     const float osc2X = (float)(halfW + 5);
     g.setColour (FractalisColors::panel);
-    g.fillRoundedRectangle (osc2X, 57.0f, (float)(halfW - 15), (float)(getHeight() - 67), 6.0f);
+    g.fillRoundedRectangle (osc2X, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f);
     g.setColour (FractalisColors::separator);
-    g.drawRoundedRectangle (osc2X, 57.0f, (float)(halfW - 15), (float)(getHeight() - 67), 6.0f, 1.0f);
+    g.drawRoundedRectangle (osc2X, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f, 1.0f);
+
+    // -------------------------------------------------------------------------
+    // SECCION DEL TECLADO DE PIANO
+    //
+    // Franja oscura de fondo para el area del piano, con separador superior.
+    // El teclado en si lo dibuja PianoKeyboardDisplay::paint().
+    // -------------------------------------------------------------------------
+    const int pianoY = 445;
+
+    // Fondo de la seccion del piano
+    g.setColour (juce::Colour (0xFF0d140d));
+    g.fillRect (0, pianoY - 5, getWidth(), getHeight() - pianoY + 5);
+
+    // Linea separadora con acento
+    g.setColour (FractalisColors::separator);
+    g.fillRect (0, pianoY - 5, getWidth(), 1);
+    g.setColour (FractalisColors::accent.withAlpha (0.35f));
+    g.fillRect (0, pianoY - 4, getWidth(), 1);
+
+    // Etiqueta "MIDI IN" a la izquierda del teclado
+    g.setColour (FractalisColors::textSecond);
+    g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
+    g.drawText ("MIDI IN", 8, pianoY - 3, 44, 10, juce::Justification::centredLeft, false);
 }
 
 //==============================================================================
@@ -259,9 +308,13 @@ void FractalisAudioProcessorEditor::resized()
     const int panelMargin = 14;
     const int halfW       = getWidth() / 2;
 
+    // Los paneles de osciladores ocupan los primeros 440px de altura,
+    // igual que antes. Solo el setSize cambio de 440 a 560.
+    const int oscPanelH = 440;
+
     // Area de contenido de cada panel (dentro del borde redondeado)
-    auto a1 = juce::Rectangle<int> (10,        57, halfW - 15, getHeight() - 67).reduced (panelMargin);
-    auto a2 = juce::Rectangle<int> (halfW + 5, 57, halfW - 15, getHeight() - 67).reduced (panelMargin);
+    auto a1 = juce::Rectangle<int> (10,        57, halfW - 15, oscPanelH - 67).reduced (panelMargin);
+    auto a2 = juce::Rectangle<int> (halfW + 5, 57, halfW - 15, oscPanelH - 67).reduced (panelMargin);
 
     // =========================================================================
     // LAYOUT OSC 1
@@ -325,4 +378,21 @@ void FractalisAudioProcessorEditor::resized()
     osc2DecaySlider.setBounds   (knobs2.removeFromLeft (knobW2));
     osc2SustainSlider.setBounds (knobs2.removeFromLeft (knobW2));
     osc2ReleaseSlider.setBounds (knobs2.removeFromLeft (knobW2));
+
+    // =========================================================================
+    // LAYOUT DEL TECLADO DE PIANO
+    //
+    // Ocupa toda la anchura con margenes laterales de 10px.
+    // Se posiciona en la franja inferior, dejando 8px de padding vertical.
+    // La altura de 95px da espacio suficiente para teclas blancas y negras
+    // con las etiquetas de octava visibles.
+    // =========================================================================
+    const int pianoMargin  = 10;
+    const int pianoTop     = oscPanelH + 8;           // 448px desde arriba
+    const int pianoHeight  = getHeight() - pianoTop - 8;  // ~104px
+
+    pianoDisplay.setBounds (pianoMargin,
+                            pianoTop,
+                            getWidth() - pianoMargin * 2,
+                            pianoHeight);
 }

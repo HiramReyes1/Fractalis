@@ -60,6 +60,21 @@ public:
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
+    // =========================================================================
+    // COMUNICACION MIDI -> GUI (thread-safe)
+    //
+    // El hilo de audio escribe aqui la nota activa; el hilo de GUI lo lee
+    // periodicamente (via Timer) para animar el teclado sin bloqueos.
+    //
+    // Convencion de valores:
+    //   -1  = ninguna nota activa (noteOff o allNotesOff)
+    //   0-127 = numero de nota MIDI actualmente sonando
+    //
+    // std::atomic garantiza lecturas/escrituras atomicas entre hilos sin
+    // necesitar un mutex, lo cual es obligatorio en el hilo de audio.
+    // =========================================================================
+    std::atomic<int> lastMidiNote { -1 };
+
 private:
     // =========================================================================
     // ESTADO DE LA NOTA MIDI
