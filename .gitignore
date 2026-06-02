@@ -1,0 +1,8 @@
+# Archivos compilados
+Builds/VisualStudio2026/x64/
+Builds/VisualStudio2026/Win32/
+
+# Archivos temporales de Visual Studio
+*.vcxproj.user
+*.suo
+.vs/
