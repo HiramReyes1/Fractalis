@@ -1,8 +1,9 @@
 /*
   ==============================================================================
     PluginProcessor.cpp
-    Aquí está TODA la lógica de audio: generación de ondas, procesamiento
-    de MIDI, y el corazón del sintetizador.
+
+    Contiene toda la logica de audio: generacion de ondas, procesamiento
+    de MIDI, envelopes ADSR, y el sistema de parametros.
   ==============================================================================
 */
 
@@ -10,42 +11,100 @@
 #include "PluginEditor.h"
 
 //==============================================================================
-// CREAR PARÁMETROS
-// Esta función define todos los parámetros que tendrá el sintetizador.
-// Cada parámetro tiene: ID, nombre visible, rango, y valor por defecto.
+// LAYOUT DE PARAMETROS
+//
+// Define los 14 parametros del sintetizador (7 por oscilador).
+// Convencion de nombres: osc1/osc2 como prefijo + nombre del parametro.
+//
+// Tipos de parametro usados:
+//   AudioParameterBool   -> valor booleano (on/off)
+//   AudioParameterChoice -> lista de opciones (indice entero)
+//   AudioParameterFloat  -> valor continuo con rango y paso definidos
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout
     FractalisAudioProcessor::createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-    // Parámetro: Tipo de onda del oscilador
-    // AudioParameterChoice = lista de opciones (no un número continuo)
-    // Opciones: 0=Sine, 1=Saw, 2=Square, 3=Triangle
-    layout.add (std::make_unique<juce::AudioParameterChoice> (
-        "waveType",           // ID interno (para referenciarlo en el código)
-        "Wave Type",          // Nombre visible en el DAW
-        juce::StringArray { "Sine", "Saw", "Square", "Triangle" },
-        0                     // Índice por defecto (0 = Sine)
-    ));
+    const juce::StringArray waveTypes { "Sine", "Saw", "Square", "Triangle" };
 
-    // Parámetro: Volumen general
-    // AudioParameterFloat = valor continuo flotante
-    // NormalisableRange: mínimo, máximo, incremento
+    // Rango de tiempo para Attack, Decay y Release: 1ms a 5 segundos.
+    // El skew factor de 0.4 comprime los valores altos y expande los bajos,
+    // dando mas precision en el rango de 1ms-500ms que es el mas usado.
+    juce::NormalisableRange<float> timeRange    (0.001f, 5.0f,  0.001f, 0.4f);
+
+    // El release puede ser mas largo para colas de notas (hasta 10 segundos)
+    juce::NormalisableRange<float> releaseRange (0.001f, 10.0f, 0.001f, 0.4f);
+
+    // -------------------------------------------------------------------------
+    // OSC 1
+    // -------------------------------------------------------------------------
+
+    // Activar / desactivar el oscilador (true = activo por defecto)
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        "osc1Enabled", "OSC 1 Enable", true));
+
+    // Tipo de onda: 0=Sine, 1=Saw, 2=Square, 3=Triangle (Saw por defecto)
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        "osc1WaveType", "OSC 1 Wave", waveTypes, 1));
+
     layout.add (std::make_unique<juce::AudioParameterFloat> (
-        "volume",
-        "Volume",
-        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f),
-        0.7f                  // Valor por defecto: 70%
-    ));
+        "osc1Volume", "OSC 1 Volume",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.7f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc1Attack",  "OSC 1 Attack",  timeRange,    0.01f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc1Decay",   "OSC 1 Decay",   timeRange,    0.1f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc1Sustain", "OSC 1 Sustain",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.8f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc1Release", "OSC 1 Release", releaseRange, 0.2f));
+
+    // -------------------------------------------------------------------------
+    // OSC 2 (desactivado por defecto para que al abrir el plugin
+    // solo se escuche OSC 1 y no haya confusion inicial)
+    // -------------------------------------------------------------------------
+
+    layout.add (std::make_unique<juce::AudioParameterBool> (
+        "osc2Enabled", "OSC 2 Enable", false));
+
+    // Square por defecto para que sea distinguible de OSC 1
+    layout.add (std::make_unique<juce::AudioParameterChoice> (
+        "osc2WaveType", "OSC 2 Wave", waveTypes, 2));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc2Volume", "OSC 2 Volume",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.7f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc2Attack",  "OSC 2 Attack",  timeRange,    0.01f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc2Decay",   "OSC 2 Decay",   timeRange,    0.1f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc2Sustain", "OSC 2 Sustain",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.8f));
+
+    layout.add (std::make_unique<juce::AudioParameterFloat> (
+        "osc2Release", "OSC 2 Release", releaseRange, 0.2f));
 
     return layout;
 }
 
 //==============================================================================
 // CONSTRUCTOR
-// Se llama una vez cuando el plugin se carga.
-// Inicializamos el APVTS aquí, pasándole el layout de parámetros.
+//
+// Inicializa el APVTS pasandole:
+//   *this             -> referencia al procesador para notificaciones
+//   nullptr           -> sin UndoManager por ahora
+//   "Parameters"      -> nombre del nodo raiz en el XML de estado guardado
+//   createParameterLayout() -> la lista de parametros definida arriba
 //==============================================================================
 FractalisAudioProcessor::FractalisAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -57,11 +116,6 @@ FractalisAudioProcessor::FractalisAudioProcessor()
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
                        ),
-       // Inicializamos el APVTS con:
-       // - *this: referencia a este procesador
-       // - nullptr: no usamos UndoManager por ahora
-       // - "Parameters": nombre del nodo raíz en el XML de estado
-       // - createParameterLayout(): la lista de parámetros que definimos arriba
        apvts (*this, nullptr, "Parameters", createParameterLayout())
 #endif
 {
@@ -71,13 +125,17 @@ FractalisAudioProcessor::~FractalisAudioProcessor() {}
 
 //==============================================================================
 // PREPARE TO PLAY
-// El DAW llama esto antes de empezar a reproducir audio.
-// Aquí inicializamos todo lo que depende del sampleRate o el tamaño del buffer.
+//
+// El DAW llama esta funcion antes de comenzar la reproduccion.
+// Los objetos ADSR necesitan conocer el sampleRate para calcular correctamente
+// los tiempos de ataque, decay y release en segundos.
+// Si el sampleRate cambia (por ejemplo, al cambiar la configuracion del DAW),
+// esta funcion se vuelve a llamar y los ADSR se actualizan.
 //==============================================================================
 void FractalisAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    // Por ahora no necesitamos hacer nada especial aquí.
-    // Cuando agreguemos filtros y efectos, los inicializaremos aquí.
+    adsr1.setSampleRate (sampleRate);
+    adsr2.setSampleRate (sampleRate);
 }
 
 void FractalisAudioProcessor::releaseResources() {}
@@ -102,148 +160,258 @@ bool FractalisAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts
 #endif
 
 //==============================================================================
-// PROCESS BLOCK — EL CORAZÓN DEL PLUGIN
-// Esta función se llama MILES de veces por segundo (cada ~5ms a 44100Hz).
-// Aquí generamos cada muestra de audio y procesamos el MIDI.
+// PROCESS BLOCK
 //
-// buffer: donde escribimos el audio de salida
-// midiMessages: los mensajes MIDI que llegaron en este bloque
+// Esta es la funcion mas importante del plugin. El DAW la llama continuamente,
+// miles de veces por segundo. Cada llamada entrega un bloque de muestras
+// (tipicamente 64-512 samples a 44100Hz = cada 1.5ms a 11.6ms).
+//
+// Flujo de trabajo:
+//   1. Leer todos los parametros del APVTS
+//   2. Actualizar los parametros ADSR en ambos envelopes
+//   3. Procesar los mensajes MIDI del bloque (noteOn, noteOff)
+//   4. Generar audio muestra por muestra
 //==============================================================================
 void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                             juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
 
-    // Leer los parámetros actuales del APVTS
-    // getRawParameterValue devuelve un puntero atómico al valor del parámetro
-    auto* waveTypeParam = apvts.getRawParameterValue ("waveType");
-    auto* volumeParam   = apvts.getRawParameterValue ("volume");
+    // -------------------------------------------------------------------------
+    // 1. LEER PARAMETROS
+    //
+    // getRawParameterValue devuelve un puntero atomico (std::atomic<float>*).
+    // Usamos .load() para leer el valor de forma thread-safe, ya que la GUI
+    // puede modificar parametros desde el hilo de UI mientras el audio corre
+    // en el hilo de audio.
+    // -------------------------------------------------------------------------
 
-    int waveType = (int) waveTypeParam->load();  // 0=Sine, 1=Saw, 2=Square, 3=Triangle
-    float volume = volumeParam->load();           // 0.0 a 1.0
+    const bool  osc1Enabled  = apvts.getRawParameterValue ("osc1Enabled") ->load() > 0.5f;
+    const int   osc1WaveType = (int) apvts.getRawParameterValue ("osc1WaveType")->load();
+    const float osc1Volume   = apvts.getRawParameterValue ("osc1Volume")  ->load();
 
-    // Obtener punteros de escritura para cada canal de salida
-    auto* leftChannel  = buffer.getWritePointer (0);
-    auto* rightChannel = buffer.getWritePointer (1);
+    const bool  osc2Enabled  = apvts.getRawParameterValue ("osc2Enabled") ->load() > 0.5f;
+    const int   osc2WaveType = (int) apvts.getRawParameterValue ("osc2WaveType")->load();
+    const float osc2Volume   = apvts.getRawParameterValue ("osc2Volume")  ->load();
 
-    int numSamples = buffer.getNumSamples();
+    // -------------------------------------------------------------------------
+    // 2. ACTUALIZAR PARAMETROS ADSR
+    //
+    // Los parametros ADSR pueden cambiar en cualquier momento (el usuario mueve
+    // un knob). Los leemos y aplicamos una vez por bloque, no por muestra,
+    // para mayor eficiencia. juce::ADSR::Parameters es una estructura simple
+    // con cuatro floats: attack, decay, sustain, release.
+    // -------------------------------------------------------------------------
 
-    // =========================================================================
-    // PROCESAR MENSAJES MIDI
-    // Iteramos por todos los eventos MIDI que llegaron en este bloque
-    // =========================================================================
+    juce::ADSR::Parameters adsr1Params;
+    adsr1Params.attack  = apvts.getRawParameterValue ("osc1Attack") ->load();
+    adsr1Params.decay   = apvts.getRawParameterValue ("osc1Decay")  ->load();
+    adsr1Params.sustain = apvts.getRawParameterValue ("osc1Sustain")->load();
+    adsr1Params.release = apvts.getRawParameterValue ("osc1Release")->load();
+    adsr1.setParameters (adsr1Params);
+
+    juce::ADSR::Parameters adsr2Params;
+    adsr2Params.attack  = apvts.getRawParameterValue ("osc2Attack") ->load();
+    adsr2Params.decay   = apvts.getRawParameterValue ("osc2Decay")  ->load();
+    adsr2Params.sustain = apvts.getRawParameterValue ("osc2Sustain")->load();
+    adsr2Params.release = apvts.getRawParameterValue ("osc2Release")->load();
+    adsr2.setParameters (adsr2Params);
+
+    // -------------------------------------------------------------------------
+    // 3. PROCESAR MENSAJES MIDI
+    //
+    // Iteramos por todos los eventos MIDI que llegaron en este bloque.
+    // Nota: un procesamiento mas preciso colocaria cada evento en su posicion
+    // exacta dentro del bloque (sample-accurate MIDI). Por ahora procesamos
+    // todos los eventos antes del loop de audio, lo cual es suficiente para
+    // la mayoria de los casos de uso.
+    // -------------------------------------------------------------------------
+
     for (const auto metadata : midiMessages)
     {
-        auto message = metadata.getMessage();
+        const auto message = metadata.getMessage();
 
         if (message.isNoteOn())
         {
-            // noteOn: el usuario presionó una tecla
-            noteIsActive = true;
-
-            // Convertir número de nota MIDI a frecuencia en Hz
+            noteIsActive     = true;
             currentFrequency = midiNoteToFrequency (message.getNoteNumber());
+            currentVelocity  = message.getVelocity() / 127.0f;
 
-            // Velocity: qué tan fuerte se presionó la tecla (0-127 → 0.0-1.0)
-            currentVelocity = message.getVelocity() / 127.0f;
-
-            // Calcular el incremento de fase para esta frecuencia
-            // Por cada sample, avanzamos esta fracción del ciclo completo
+            // phaseIncrement: cuanto avanza la fase por sample para generar
+            // la frecuencia correcta. A 440Hz con 44100Hz de sample rate:
+            // increment = 440 / 44100 = 0.00997... (un ciclo cada 100.2 samples)
             phaseIncrement = currentFrequency / getSampleRate();
+
+            // Reiniciar fases al inicio de cada nota para evitar clicks
+            // provocados por comenzar el ciclo en un punto arbitrario
+            osc1Phase = 0.0;
+            osc2Phase = 0.0;
+
+            // Notificar a ambos envelopes que comienza una nota.
+            // Esto dispara la etapa de Attack independientemente del estado
+            // anterior del envelope.
+            adsr1.noteOn();
+            adsr2.noteOn();
         }
         else if (message.isNoteOff())
         {
-            // noteOff: el usuario soltó la tecla
-            // (Más adelante aquí irá el release del ADSR)
-            noteIsActive = false;
+            noteIsActive    = false;
             currentVelocity = 0.0f;
+
+            // noteOff dispara la etapa de Release en ambos envelopes.
+            // El audio sigue generandose durante el release hasta que
+            // adsr.isActive() devuelve false.
+            adsr1.noteOff();
+            adsr2.noteOff();
         }
         else if (message.isAllNotesOff())
         {
-            // Panic: silenciar todo
-            noteIsActive = false;
+            // Panic: cortar todo audio inmediatamente
+            noteIsActive    = false;
             currentVelocity = 0.0f;
-            phase = 0.0;
+            osc1Phase       = 0.0;
+            osc2Phase       = 0.0;
+            adsr1.reset();
+            adsr2.reset();
         }
     }
 
-    // =========================================================================
-    // GENERAR AUDIO SAMPLE POR SAMPLE
-    // Iteramos por cada muestra del buffer y generamos el audio
-    // =========================================================================
+    // -------------------------------------------------------------------------
+    // 4. GENERAR AUDIO MUESTRA POR MUESTRA
+    //
+    // Obtenemos punteros directos al buffer de salida para escritura eficiente.
+    // Los buffers son arrays de float en memoria contigua.
+    // -------------------------------------------------------------------------
+
+    auto* leftChannel  = buffer.getWritePointer (0);
+    auto* rightChannel = buffer.getWritePointer (1);
+    const int numSamples = buffer.getNumSamples();
+
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        float outputSample = 0.0f;
+        float osc1Out = 0.0f;
+        float osc2Out = 0.0f;
 
-        if (noteIsActive)
+        // OSC 1:
+        // adsr1.isActive() devuelve true durante Attack, Decay, Sustain y Release.
+        // Cuando el Release termina devuelve false y el oscilador se silencia.
+        // Esto permite que la nota suene aunque el usuario ya haya soltado la tecla
+        // (durante la cola del release).
+        if (adsr1.isActive())
         {
-            // Generar la muestra según el tipo de onda seleccionado
-            switch (waveType)
-            {
-                case 0: outputSample = generateSine     (phase); break;
-                case 1: outputSample = generateSaw      (phase); break;
-                case 2: outputSample = generateSquare   (phase); break;
-                case 3: outputSample = generateTriangle (phase); break;
-                default: outputSample = generateSine    (phase); break;
-            }
+            // Generar la muestra de onda segun el tipo seleccionado
+            const float wave1 = generateWave (osc1Phase, osc1WaveType);
 
-            // Aplicar volumen y velocity
-            outputSample *= volume * currentVelocity;
+            // getNextSample() avanza el envelope un step y devuelve el valor
+            // actual (0.0 a 1.0). Multiplicamos la onda por este valor para
+            // darle la forma del envelope.
+            const float env1 = adsr1.getNextSample();
 
-            // Avanzar la fase para el siguiente sample
-            // Cuando llega a 1.0 (un ciclo completo), vuelve a 0.0
-            phase += phaseIncrement;
-            if (phase >= 1.0)
-                phase -= 1.0;
+            // Solo contribuir al audio si el oscilador esta habilitado
+            if (osc1Enabled)
+                osc1Out = wave1 * env1 * osc1Volume * currentVelocity;
+
+            // Avanzar la fase para el siguiente sample.
+            // El modulo 1.0 mantiene la fase en el rango [0.0, 1.0).
+            osc1Phase += phaseIncrement;
+            if (osc1Phase >= 1.0) osc1Phase -= 1.0;
         }
 
-        // Escribir la misma muestra en izquierdo y derecho (mono duplicado)
-        leftChannel[sample]  = outputSample;
+        // OSC 2: mismo proceso que OSC 1 con sus propios parametros
+        if (adsr2.isActive())
+        {
+            const float wave2 = generateWave (osc2Phase, osc2WaveType);
+            const float env2  = adsr2.getNextSample();
+
+            if (osc2Enabled)
+                osc2Out = wave2 * env2 * osc2Volume * currentVelocity;
+
+            osc2Phase += phaseIncrement;
+            if (osc2Phase >= 1.0) osc2Phase -= 1.0;
+        }
+
+        // Mezclar ambos osciladores.
+        // El factor 0.5 asegura que con ambos osciladores a volumen maximo
+        // la salida no exceda el rango [-1.0, 1.0] y no cause clipping.
+        // Con un solo oscilador activo la salida maxima sera 0.5, lo cual
+        // es correcto: el usuario puede compensar con el knob de volumen.
+        const float outputSample = (osc1Out + osc2Out) * 0.5f;
+
+        // Escribir la misma muestra en ambos canales (mono duplicado a estereo).
+        // En el futuro se puede agregar panorama, chorus estereo, etc.
+        leftChannel [sample] = outputSample;
         rightChannel[sample] = outputSample;
     }
 }
 
 //==============================================================================
 // GENERADORES DE ONDA
-// Cada función recibe la fase (0.0 a 1.0) y devuelve una muestra (-1.0 a 1.0)
+//
+// Todos reciben la fase en rango [0.0, 1.0) donde:
+//   0.0 = inicio del ciclo
+//   0.5 = mitad del ciclo
+//   1.0 = fin del ciclo (equivalente al inicio del siguiente)
+//
+// Todos devuelven valores en el rango [-1.0, 1.0].
 //==============================================================================
 
-// SENO: usa la función matemática sin()
-// Fase 0.0 a 1.0 → ángulo 0 a 2π
+// Dispatcher: selecciona el generador correcto segun waveType (0-3)
+float FractalisAudioProcessor::generateWave (double currentPhase, int waveType)
+{
+    switch (waveType)
+    {
+        case 0:  return generateSine     (currentPhase);
+        case 1:  return generateSaw      (currentPhase);
+        case 2:  return generateSquare   (currentPhase);
+        case 3:  return generateTriangle (currentPhase);
+        default: return generateSine     (currentPhase);
+    }
+}
+
+// SENO: funcion trigonometrica pura.
+// Sin armonicos, sonido suave y puro. Fundamental solamente.
 float FractalisAudioProcessor::generateSine (double currentPhase)
 {
     return (float) std::sin (currentPhase * juce::MathConstants<double>::twoPi);
 }
 
-// SIERRA (SAW): sube linealmente de -1 a +1 en un ciclo
-// Fórmula directa: (fase * 2) - 1
-// Ejemplo: fase=0.0 → -1.0, fase=0.5 → 0.0, fase=0.99 → ~0.98
+// SIERRA (Sawtooth): sube linealmente de -1 a +1 y cae abruptamente.
+// Rica en armonicos pares e impares (1, 2, 3, 4...).
+// Sonido brillante, clasico para bajos y leads.
+// Nota: esta implementacion tiene aliasing. Se mejorara con PolyBLEP mas adelante.
 float FractalisAudioProcessor::generateSaw (double currentPhase)
 {
     return (float) (2.0 * currentPhase - 1.0);
 }
 
-// CUADRADA (SQUARE): +1 en la primera mitad del ciclo, -1 en la segunda
-// Esto crea los armónicos impares característicos (1, 3, 5, 7...)
+// CUADRADA (Square): +1 durante la primera mitad, -1 durante la segunda.
+// Contiene solo armonicos impares (1, 3, 5, 7...).
+// Sonido hueco y nasal, clasico para leads y bajos con cuerpo.
 float FractalisAudioProcessor::generateSquare (double currentPhase)
 {
     return currentPhase < 0.5 ? 1.0f : -1.0f;
 }
 
-// TRIANGULAR: sube de -1 a +1 en la primera mitad, baja de +1 a -1 en la segunda
-// Es como una sierra pero simétrica, más suave
+// TRIANGULAR (Triangle): rampa lineal simetrica.
+// Solo armonicos impares como la cuadrada, pero con caida de -12dB/oct
+// en lugar de -6dB/oct. Sonido mas suave y mellizo que la cuadrada.
 float FractalisAudioProcessor::generateTriangle (double currentPhase)
 {
     if (currentPhase < 0.5)
-        return (float) (4.0 * currentPhase - 1.0);   // sube: -1 → +1
+        return (float) (4.0 * currentPhase - 1.0);   // sube de -1 a +1
     else
-        return (float) (3.0 - 4.0 * currentPhase);   // baja: +1 → -1
+        return (float) (3.0 - 4.0 * currentPhase);   // baja de +1 a -1
 }
 
 //==============================================================================
-// CONVERSIÓN MIDI → FRECUENCIA
-// Fórmula estándar: A4 (nota 69) = 440Hz
-// Cada semitono = multiplicar por 2^(1/12)
+// CONVERSION MIDI A FRECUENCIA
+//
+// Formula de afinacion igual temperada:
+//   f(n) = 440 * 2^((n - 69) / 12)
+//
+// La nota 69 es A4 (La central) = 440 Hz.
+// Cada semitono multiplica la frecuencia por 2^(1/12) = ~1.0595.
+// Cada octava dobla la frecuencia (12 semitonos = 2^1 = x2).
 //==============================================================================
 double FractalisAudioProcessor::midiNoteToFrequency (int midiNote)
 {
@@ -251,8 +419,11 @@ double FractalisAudioProcessor::midiNoteToFrequency (int midiNote)
 }
 
 //==============================================================================
-// ESTADO (PRESETS)
-// Por ahora JUCE maneja esto automáticamente con el APVTS
+// SISTEMA DE PRESETS (ESTADO)
+//
+// JUCE serializa el estado completo del APVTS a un bloque de memoria XML.
+// El DAW llama getStateInformation() para guardar el preset y
+// setStateInformation() para restaurarlo.
 //==============================================================================
 void FractalisAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
@@ -270,17 +441,20 @@ void FractalisAudioProcessor::setStateInformation (const void* data, int sizeInB
 }
 
 //==============================================================================
-const juce::String FractalisAudioProcessor::getName() const { return JucePlugin_Name; }
-bool FractalisAudioProcessor::acceptsMidi() const { return true; }
-bool FractalisAudioProcessor::producesMidi() const { return false; }
-bool FractalisAudioProcessor::isMidiEffect() const { return false; }
-double FractalisAudioProcessor::getTailLengthSeconds() const { return 0.0; }
-int FractalisAudioProcessor::getNumPrograms() { return 1; }
-int FractalisAudioProcessor::getCurrentProgram() { return 0; }
-void FractalisAudioProcessor::setCurrentProgram (int index) {}
-const juce::String FractalisAudioProcessor::getProgramName (int index) { return {}; }
+// BOILERPLATE DE JUCE (funciones requeridas sin logica especial)
+//==============================================================================
+const juce::String FractalisAudioProcessor::getName() const             { return JucePlugin_Name; }
+bool FractalisAudioProcessor::acceptsMidi() const                       { return true; }
+bool FractalisAudioProcessor::producesMidi() const                      { return false; }
+bool FractalisAudioProcessor::isMidiEffect() const                      { return false; }
+double FractalisAudioProcessor::getTailLengthSeconds() const            { return 0.0; }
+int FractalisAudioProcessor::getNumPrograms()                           { return 1; }
+int FractalisAudioProcessor::getCurrentProgram()                        { return 0; }
+void FractalisAudioProcessor::setCurrentProgram (int index)             {}
+const juce::String FractalisAudioProcessor::getProgramName (int index)  { return {}; }
 void FractalisAudioProcessor::changeProgramName (int index, const juce::String& newName) {}
-bool FractalisAudioProcessor::hasEditor() const { return true; }
+bool FractalisAudioProcessor::hasEditor() const                         { return true; }
+
 juce::AudioProcessorEditor* FractalisAudioProcessor::createEditor()
 {
     return new FractalisAudioProcessorEditor (*this);

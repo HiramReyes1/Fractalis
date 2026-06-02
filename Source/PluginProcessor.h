@@ -1,16 +1,16 @@
 /*
   ==============================================================================
     PluginProcessor.h
-    Aquí DECLARAMOS todo lo que el procesador de audio va a usar.
-    Piénsalo como el "índice" o "contrato" de lo que existe.
+
+    Declara todos los parametros, variables internas y funciones del procesador.
+    Este archivo es el "contrato" que otros archivos consultan para saber
+    que existe y que puede hacer el procesador.
   ==============================================================================
 */
 
 #pragma once
-
 #include <JuceHeader.h>
 
-//==============================================================================
 class FractalisAudioProcessor : public juce::AudioProcessor
 {
 public:
@@ -45,60 +45,78 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     // =========================================================================
-    // PARÁMETROS DEL OSCILADOR
-    // AudioProcessorValueTreeState (APVTS) es el sistema de JUCE para manejar
-    // parámetros que se pueden automatizar en el DAW, guardar en presets, y
-    // conectar automáticamente a controles de la GUI.
+    // APVTS (AudioProcessorValueTreeState)
+    //
+    // Sistema central de parametros de JUCE. Maneja automaticamente:
+    //   - Automatizacion en el DAW
+    //   - Guardado y carga de presets
+    //   - Sincronizacion bidireccional con controles de la GUI
+    //
+    // Parametros de OSC 1: osc1Enabled, osc1WaveType, osc1Volume,
+    //                      osc1Attack, osc1Decay, osc1Sustain, osc1Release
+    // Parametros de OSC 2: osc2Enabled, osc2WaveType, osc2Volume,
+    //                      osc2Attack, osc2Decay, osc2Sustain, osc2Release
     // =========================================================================
     juce::AudioProcessorValueTreeState apvts;
-
-    // Esta función estática crea el "layout" (lista) de todos los parámetros.
-    // Es estática porque la necesitamos antes de que el procesador exista.
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
     // =========================================================================
-    // VARIABLES INTERNAS DEL OSCILADOR
+    // ESTADO DE LA NOTA MIDI
+    //
+    // Ambos osciladores comparten la misma nota MIDI (tocan al unsono).
+    // El phaseIncrement se calcula una sola vez al recibir el noteOn.
     // =========================================================================
-
-    // La fase es la posición actual en el ciclo de la onda (0.0 a 1.0)
-    // Necesitamos una por canal (izquierdo y derecho) para audio estéreo
-    double phase = 0.0;
-
-    // El incremento de fase: cuánto avanzamos por sample para generar
-    // la frecuencia correcta. Se calcula como: frecuencia / sampleRate
-    double phaseIncrement = 0.0;
-
-    // La frecuencia MIDI actual (en Hz). Se actualiza con cada noteOn.
     double currentFrequency = 440.0;
-
-    // Si hay una nota activa o no (para silenciar cuando no hay nota)
-    bool noteIsActive = false;
-
-    // La velocidad (velocity) de la nota MIDI (0.0 a 1.0)
-    // Controla el volumen de la nota
-    float currentVelocity = 0.0f;
+    double phaseIncrement   = 0.0;
+    bool   noteIsActive     = false;
+    float  currentVelocity  = 0.0f;
 
     // =========================================================================
-    // FUNCIONES GENERADORAS DE ONDA
-    // Cada una recibe la fase actual (0.0 a 1.0) y devuelve una muestra
-    // de audio (-1.0 a 1.0)
+    // ACUMULADORES DE FASE
+    //
+    // Cada oscilador tiene su propio acumulador de fase (0.0 a 1.0).
+    // Representan la posicion actual dentro del ciclo de la onda.
+    // Tenerlos separados permite que cada oscilador funcione de forma
+    // independiente (por ejemplo, si en el futuro se agregan detuning
+    // o formas de onda que se reinician de forma distinta).
     // =========================================================================
+    double osc1Phase = 0.0;
+    double osc2Phase = 0.0;
 
-    // Onda sinusoidal - suave, sin armónicos
-    float generateSine (double currentPhase);
+    // =========================================================================
+    // ENVELOPES ADSR
+    //
+    // juce::ADSR es el procesador de envelope incluido en JUCE.
+    // Cada oscilador tiene el suyo propio para permitir configuraciones
+    // ADSR diferentes (por ejemplo, OSC 1 con ataque corto, OSC 2 con
+    // ataque largo para una capa de pad).
+    //
+    // El ADSR tiene cuatro etapas:
+    //   Attack  (ATK): tiempo que tarda en llegar de 0 a 1 al presionar la tecla
+    //   Decay   (DCY): tiempo que tarda en bajar de 1 al nivel de sustain
+    //   Sustain (SUS): nivel que mantiene mientras la tecla esta presionada
+    //   Release (REL): tiempo que tarda en llegar a 0 al soltar la tecla
+    // =========================================================================
+    juce::ADSR adsr1;
+    juce::ADSR adsr2;
 
-    // Onda de sierra (sawtooth) - rica en armónicos, sonido brillante
-    float generateSaw (double currentPhase);
-
-    // Onda cuadrada (square) - armónicos impares, sonido hueco/nasal
-    float generateSquare (double currentPhase);
-
-    // Onda triangular - armónicos impares pero más suave que la cuadrada
+    // =========================================================================
+    // GENERADORES DE ONDA
+    //
+    // generateWave() es el dispatcher: recibe el tipo de onda (0-3) y
+    // llama al generador correspondiente.
+    //
+    // Cada generador individual recibe la fase actual (0.0 a 1.0) y
+    // devuelve una muestra de audio en el rango [-1.0, 1.0].
+    // =========================================================================
+    float generateWave     (double currentPhase, int waveType);
+    float generateSine     (double currentPhase);
+    float generateSaw      (double currentPhase);
+    float generateSquare   (double currentPhase);
     float generateTriangle (double currentPhase);
 
-    // Convierte un número de nota MIDI (0-127) a frecuencia en Hz
-    // Fórmula: 440 * 2^((nota - 69) / 12)
+    // Convierte un numero de nota MIDI (0-127) a frecuencia en Hz
     double midiNoteToFrequency (int midiNote);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FractalisAudioProcessor)
