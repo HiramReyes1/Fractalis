@@ -34,7 +34,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout
     juce::NormalisableRange<float> timeRange    (0.001f, 5.0f,  0.001f, 0.4f);
 
     // El release puede ser mas largo para colas de notas (hasta 10 segundos)
-    juce::NormalisableRange<float> releaseRange (0.001f, 10.0f, 0.001f, 0.4f);
+    juce::NormalisableRange<float> releaseRange (0.001f, 5.0f, 0.001f, 0.4f);
 
     // -------------------------------------------------------------------------
     // OSC 1
@@ -233,9 +233,13 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         if (message.isNoteOn())
         {
+            // Incrementar contador: saber cuantas teclas hay presionadas.
+            // El ADSR se retrigerea en cada noteOn para soporte de legato
+            // (cambiar nota sin silencio entre ellas).
+            heldNoteCount++;
+
             noteIsActive     = true;
             currentFrequency = midiNoteToFrequency (message.getNoteNumber());
-            currentVelocity  = message.getVelocity() / 127.0f;
 
             // phaseIncrement: cuanto avanza la fase por sample para generar
             // la frecuencia correcta. A 440Hz con 44100Hz de sample rate:
@@ -259,25 +263,35 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
         else if (message.isNoteOff())
         {
-            noteIsActive    = false;
-            currentVelocity = 0.0f;
+            // Decrementar el contador, con piso en 0 para evitar negativos
+            // si algun noteOff llega sin su noteOn correspondiente.
+            heldNoteCount = juce::jmax (0, heldNoteCount - 1);
 
-            // noteOff dispara la etapa de Release en ambos envelopes.
-            // El audio sigue generandose durante el release hasta que
-            // adsr.isActive() devuelve false.
-            adsr1.noteOff();
-            adsr2.noteOff();
+            // El release se dispara SOLO cuando no queda ninguna tecla presionada.
+            // Esto corrige el bug donde acordes o notas solapadas causaban que
+            // cada noteOff individual reiniciara el timer de release, acumulando
+            // un release mucho mas largo del configurado.
+            if (heldNoteCount == 0)
+            {
+                noteIsActive = false;
 
-            // Indicar a la GUI que no hay nota activa (-1 = sin nota).
-            lastMidiNote.store (-1);
+                // noteOff dispara la etapa de Release en ambos envelopes.
+                // El audio sigue generandose durante el release hasta que
+                // adsr.isActive() devuelve false.
+                adsr1.noteOff();
+                adsr2.noteOff();
+
+                // Indicar a la GUI que no hay nota activa (-1 = sin nota).
+                lastMidiNote.store (-1);
+            }
         }
         else if (message.isAllNotesOff())
         {
-            // Panic: cortar todo audio inmediatamente
-            noteIsActive    = false;
-            currentVelocity = 0.0f;
-            osc1Phase       = 0.0;
-            osc2Phase       = 0.0;
+            // Panic: cortar todo audio inmediatamente y resetear el contador
+            heldNoteCount = 0;
+            noteIsActive  = false;
+            osc1Phase     = 0.0;
+            osc2Phase     = 0.0;
             adsr1.reset();
             adsr2.reset();
 
@@ -319,7 +333,7 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
             // Solo contribuir al audio si el oscilador esta habilitado
             if (osc1Enabled)
-                osc1Out = wave1 * env1 * osc1Volume * currentVelocity;
+                osc1Out = wave1 * env1 * osc1Volume; //sin velocity
 
             // Avanzar la fase para el siguiente sample.
             // El modulo 1.0 mantiene la fase en el rango [0.0, 1.0).
@@ -334,7 +348,7 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             const float env2  = adsr2.getNextSample();
 
             if (osc2Enabled)
-                osc2Out = wave2 * env2 * osc2Volume * currentVelocity;
+                osc2Out = wave2 * env2 * osc2Volume; //sin velocity
 
             osc2Phase += phaseIncrement;
             if (osc2Phase >= 1.0) osc2Phase -= 1.0;
