@@ -3,9 +3,9 @@
     PluginEditor.cpp — Fractalis Synthesizer v0.2
 
     Ventana: 820 × 680 px
-      Fila 1 (y 57–370)  : OSC 1 (izquierda) | OSC 2 (derecha)
-      Fila 2 (y 375–570)  : LFO | MOD ENV | FILTER
-      Piano  (y 578–670)  : teclado MIDI animado
+      Fila 1 (y 57–244)   : OSC 1 | OSC 2  — compacta (h=188)
+      Fila 2 (y 251–569)  : LFO | MOD ENV | FILTER — alta (h=319)
+      Piano  (y 578–672)  : teclado MIDI animado
   ==============================================================================
 */
 
@@ -267,37 +267,37 @@ void FractalisAudioProcessorEditor::paint (juce::Graphics& g)
     const int thirdW   = getWidth() / 3;
 
     // -------------------------------------------------------------------------
-    // FILA 1 — Paneles OSC 1 y OSC 2 (y 57 – 370)
+    // FILA 1 — Paneles OSC 1 y OSC 2 (y 57–244, h=188 compacto)
     // -------------------------------------------------------------------------
-    const float osc1PanelH = 310.0f;
+    const float oscPanelH = 188.0f;
 
     g.setColour (FractalisColors::panel);
-    g.fillRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f);
+    g.fillRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), oscPanelH, 6.0f);
     g.setColour (FractalisColors::separator);
-    g.drawRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f, 1.0f);
+    g.drawRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), oscPanelH, 6.0f, 1.0f);
 
     g.setColour (FractalisColors::panel);
-    g.fillRoundedRectangle ((float)(halfW + 5), 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f);
+    g.fillRoundedRectangle ((float)(halfW + 5), 57.0f, (float)(halfW - 15), oscPanelH, 6.0f);
     g.setColour (FractalisColors::separator);
-    g.drawRoundedRectangle ((float)(halfW + 5), 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f, 1.0f);
+    g.drawRoundedRectangle ((float)(halfW + 5), 57.0f, (float)(halfW - 15), oscPanelH, 6.0f, 1.0f);
 
     // -------------------------------------------------------------------------
-    // FILA 2 — Paneles LFO | MOD ENV | FILTER (y 375 – 570)
+    // FILA 2 — Paneles LFO | MOD ENV | FILTER (y 251–569, h=319 amplia)
     // -------------------------------------------------------------------------
-    const float row2Y = 375.0f;
-    const float row2H = 190.0f;
+    const float row2Y = 251.0f;
+    const float row2H = 319.0f;
 
-    // Separador entre filas
+    // Separador entre filas (línea doble: oscura + acento tenue)
     g.setColour (FractalisColors::separator);
-    g.fillRect (0, 370, getWidth(), 1);
+    g.fillRect (0, 245, getWidth(), 1);
     g.setColour (FractalisColors::accent.withAlpha (0.25f));
-    g.fillRect (0, 371, getWidth(), 1);
+    g.fillRect (0, 246, getWidth(), 1);
 
-    // Paneles de fila 2 con color ligeramente diferente para distinguirlos visualmente
+    // Tres paneles en tercios iguales con color diferenciado
     for (int col = 0; col < 3; ++col)
     {
-        const float px = 10.0f + col * (thirdW);
-        const float pw = (float) thirdW - 10.0f;
+        const float px = 10.0f + col * (float)thirdW;
+        const float pw = (float)thirdW - 10.0f;
         g.setColour (FractalisColors::panel2);
         g.fillRoundedRectangle (px, row2Y, pw, row2H, 6.0f);
         g.setColour (FractalisColors::darkGreen);
@@ -329,10 +329,10 @@ void FractalisAudioProcessorEditor::resized()
     const int thirdW = getWidth() / 3;
 
     // =========================================================================
-    // FILA 1 — OSC 1 y OSC 2 (y 57, altura 310)
+    // FILA 1 — OSC 1 y OSC 2 (y 57, h=188 compacto)
     // =========================================================================
-    auto a1 = juce::Rectangle<int> (10,        57, halfW - 15, 310).reduced (panelMargin);
-    auto a2 = juce::Rectangle<int> (halfW + 5, 57, halfW - 15, 310).reduced (panelMargin);
+    auto a1 = juce::Rectangle<int> (10,        57, halfW - 15, 188).reduced (panelMargin);
+    auto a2 = juce::Rectangle<int> (halfW + 5, 57, halfW - 15, 188).reduced (panelMargin);
 
     // Helper lambda para layout de un panel de oscilador
     auto layoutOscPanel = [&](juce::Rectangle<int>& a,
@@ -345,24 +345,25 @@ void FractalisAudioProcessorEditor::resized()
                                juce::Label& relLbl,  juce::Slider& relSlider)
     {
         // Fila: título + enable
-        auto header = a.removeFromTop (26);
+        auto header = a.removeFromTop (22);
         title.setBounds (header.removeFromLeft (60));
         enableBtn.setBounds (header);
-        a.removeFromTop (6);
+        a.removeFromTop (3);
 
         // Selector de forma de onda
-        waveLabel.setBounds (a.removeFromTop (14));
-        waveCombo.setBounds (a.removeFromTop (24));
-        a.removeFromTop (10);
+        waveLabel.setBounds (a.removeFromTop (13));
+        waveCombo.setBounds (a.removeFromTop (22));
+        a.removeFromTop (5);
 
-        // Etiquetas y knobs (5 columnas)
+        // Etiquetas y knobs en 5 columnas iguales
+        // Knobs de 82px de alto — compactos pero cómodos de usar
         const int kw = a.getWidth() / 5;
-        auto lblRow = a.removeFromTop (14);
+        auto lblRow = a.removeFromTop (13);
         volLbl.setBounds (lblRow.removeFromLeft (kw)); atkLbl.setBounds (lblRow.removeFromLeft (kw));
         dcyLbl.setBounds (lblRow.removeFromLeft (kw)); susLbl.setBounds (lblRow.removeFromLeft (kw));
         relLbl.setBounds (lblRow.removeFromLeft (kw));
 
-        auto kRow = a.removeFromTop (juce::jmin (a.getHeight(), 115));
+        auto kRow = a.removeFromTop (82);
         volSlider.setBounds (kRow.removeFromLeft (kw)); atkSlider.setBounds (kRow.removeFromLeft (kw));
         dcySlider.setBounds (kRow.removeFromLeft (kw)); susSlider.setBounds (kRow.removeFromLeft (kw));
         relSlider.setBounds (kRow.removeFromLeft (kw));
@@ -381,95 +382,104 @@ void FractalisAudioProcessorEditor::resized()
         osc2ReleaseLabel, osc2ReleaseSlider);
 
     // =========================================================================
-    // FILA 2 — LFO | MOD ENV | FILTER (y 375, altura 190)
+    // FILA 2 — LFO | MOD ENV | FILTER (y 251, h=319 amplia)
     // =========================================================================
-    const int row2Y = 375;
-    const int row2H = 190;
+    // Cada panel ocupa un tercio del ancho. El espacio extra respecto a la
+    // fila 1 (≈130px más) va a knobs más grandes y gaps más generosos.
+    const int row2Y = 251;
+    const int row2H = 319;
 
-    auto lfoArea    = juce::Rectangle<int> (10,           row2Y, thirdW - 10,  row2H).reduced (panelMargin);
-    auto modEnvArea = juce::Rectangle<int> (thirdW + 0,   row2Y, thirdW - 10,  row2H).reduced (panelMargin);
-    auto filterArea = juce::Rectangle<int> (thirdW * 2,   row2Y, thirdW - 10,  row2H).reduced (panelMargin);
+    auto lfoArea    = juce::Rectangle<int> (10,          row2Y, thirdW - 10, row2H).reduced (panelMargin);
+    auto modEnvArea = juce::Rectangle<int> (thirdW,      row2Y, thirdW - 10, row2H).reduced (panelMargin);
+    auto filterArea = juce::Rectangle<int> (thirdW * 2,  row2Y, thirdW - 10, row2H).reduced (panelMargin);
 
     // -------------------------------------------------------------------------
-    // LFO — título, Rate, Depth (knobs), Wave + Dest (combos)
+    // LFO — título, Rate + Depth (knobs 120px), Wave + Dest (combos)
     // -------------------------------------------------------------------------
     {
         auto& a = lfoArea;
-        lfoTitle.setBounds (a.removeFromTop (20));
-        a.removeFromTop (4);
+        lfoTitle.setBounds (a.removeFromTop (18));
+        a.removeFromTop (10);
 
-        // Knobs Rate y Depth en dos columnas
+        // Rate y Depth: dos columnas, knobs grandes para precisión de edición
         const int kw = a.getWidth() / 2;
-        auto lblRow = a.removeFromTop (14);
+        auto lblRow = a.removeFromTop (13);
         lfoRateLabel.setBounds  (lblRow.removeFromLeft (kw));
         lfoDepthLabel.setBounds (lblRow);
 
-        auto kRow = a.removeFromTop (80);
+        auto kRow = a.removeFromTop (120);
         lfoRateSlider.setBounds  (kRow.removeFromLeft (kw));
         lfoDepthSlider.setBounds (kRow);
 
-        // Wave y Dest en filas separadas
+        a.removeFromTop (12);
+
+        // Wave y Dest: etiqueta + combo, uno debajo del otro
         lfoWaveLabel.setBounds (a.removeFromTop (13));
-        lfoWaveCombo.setBounds (a.removeFromTop (22));
-        a.removeFromTop (4);
+        lfoWaveCombo.setBounds (a.removeFromTop (24));
+        a.removeFromTop (8);
         lfoDestLabel.setBounds (a.removeFromTop (13));
-        lfoDestCombo.setBounds (a.removeFromTop (22));
+        lfoDestCombo.setBounds (a.removeFromTop (24));
     }
 
     // -------------------------------------------------------------------------
-    // MOD ENV — título, 4 knobs ADSR + Amount, Dest combo
+    // MOD ENV — título, fila1: ATK/DCY/SUS/REL (knobs 85px),
+    //            fila2: AMOUNT (knob 85px) + DEST (combo)
     // -------------------------------------------------------------------------
     {
         auto& a = modEnvArea;
-        modEnvTitle.setBounds (a.removeFromTop (20));
-        a.removeFromTop (4);
+        modEnvTitle.setBounds (a.removeFromTop (18));
+        a.removeFromTop (8);
 
-        // Primera fila de knobs: ATK / DCY / SUS / REL
+        // Fila 1 de knobs: ATK / DCY / SUS / REL en 4 columnas
         const int kw4 = a.getWidth() / 4;
-        auto lblRow1 = a.removeFromTop (14);
+        auto lblRow1 = a.removeFromTop (13);
         modEnvAttackLabel.setBounds  (lblRow1.removeFromLeft (kw4));
         modEnvDecayLabel.setBounds   (lblRow1.removeFromLeft (kw4));
         modEnvSustainLabel.setBounds (lblRow1.removeFromLeft (kw4));
         modEnvReleaseLabel.setBounds (lblRow1);
 
-        auto kRow1 = a.removeFromTop (72);
+        auto kRow1 = a.removeFromTop (85);
         modEnvAttackSlider.setBounds  (kRow1.removeFromLeft (kw4));
         modEnvDecaySlider.setBounds   (kRow1.removeFromLeft (kw4));
         modEnvSustainSlider.setBounds (kRow1.removeFromLeft (kw4));
         modEnvReleaseSlider.setBounds (kRow1);
 
-        // Segunda fila: Amount (knob) + Dest (combo)
+        a.removeFromTop (6);
+
+        // Fila 2: Amount (mitad izquierda) + Dest combo (mitad derecha)
         const int amountW = a.getWidth() / 2;
-        auto lblRow2 = a.removeFromTop (14);
+        auto lblRow2 = a.removeFromTop (13);
         modEnvAmountLabel.setBounds (lblRow2.removeFromLeft (amountW));
         modEnvDestLabel.setBounds   (lblRow2);
 
-        auto row2 = a.removeFromTop (juce::jmin (a.getHeight(), 50));
-        auto amtArea  = row2.removeFromLeft (amountW);
-        modEnvAmountSlider.setBounds (amtArea);
-        // Dest combo centrado verticalmente en la mitad del espacio disponible
-        modEnvDestCombo.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 22));
+        // Amount: knob de 85px; Dest: combo centrado verticalmente
+        auto splitRow = a.removeFromTop (85);
+        modEnvAmountSlider.setBounds (splitRow.removeFromLeft (amountW));
+        modEnvDestCombo.setBounds    (splitRow.withSizeKeepingCentre (splitRow.getWidth(), 24));
     }
 
     // -------------------------------------------------------------------------
-    // FILTER — título, Cutoff + Res (knobs), Mode (combo)
+    // FILTER — título, Cutoff + Res (knobs 120px), Mode (combo)
     // -------------------------------------------------------------------------
     {
         auto& a = filterArea;
-        filterTitle.setBounds (a.removeFromTop (20));
-        a.removeFromTop (4);
+        filterTitle.setBounds (a.removeFromTop (18));
+        a.removeFromTop (10);
 
+        // Cutoff y Res: dos columnas con knobs grandes (mismo tamaño que LFO)
         const int kw = a.getWidth() / 2;
-        auto lblRow = a.removeFromTop (14);
+        auto lblRow = a.removeFromTop (13);
         filterCutoffLabel.setBounds (lblRow.removeFromLeft (kw));
         filterResLabel.setBounds    (lblRow);
 
-        auto kRow = a.removeFromTop (80);
+        auto kRow = a.removeFromTop (120);
         filterCutoffSlider.setBounds (kRow.removeFromLeft (kw));
         filterResSlider.setBounds    (kRow);
 
+        a.removeFromTop (20);
+
         filterModeLabel.setBounds (a.removeFromTop (13));
-        filterModeCombo.setBounds (a.removeFromTop (22));
+        filterModeCombo.setBounds (a.removeFromTop (24));
     }
 
     // =========================================================================
