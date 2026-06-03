@@ -95,6 +95,7 @@ void FractalisAudioProcessorEditor::setupTitle (juce::Label& label, const juce::
 FractalisAudioProcessorEditor::FractalisAudioProcessorEditor (FractalisAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
+    setLookAndFeel(&fractalisLookAndFeel);
     // =========================================================================
     // OSC 1
     // =========================================================================
@@ -239,6 +240,7 @@ FractalisAudioProcessorEditor::FractalisAudioProcessorEditor (FractalisAudioProc
 
 FractalisAudioProcessorEditor::~FractalisAudioProcessorEditor()
 {
+    setLookAndFeel(nullptr); 
     stopTimer();
 }
 
