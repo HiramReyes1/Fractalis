@@ -1,85 +1,90 @@
 /*
   ==============================================================================
-    PluginProcessor.h
+    PluginProcessor.h — Fractalis Synthesizer v0.2
 
-    Declara todos los parametros, variables internas y funciones del procesador.
-    Este archivo es el "contrato" que otros archivos consultan para saber
-    que existe y que puede hacer el procesador.
+    Nuevos módulos añadidos respecto a v0.1:
+      - SVFilter    : filtro State Variable (LP/HP/BP/Notch), 2do orden
+      - LFO         : oscilador de baja frecuencia con destino de modulación
+      - ModEnv      : envelope de modulación independiente (no ligado a audio)
+      - Sistema de routing: LFO y ModEnv pueden apuntar a cualquier parámetro
+                            continuo del sintetizador vía un índice de destino.
   ==============================================================================
 */
 
 #pragma once
 #include <JuceHeader.h>
 
-//==============================================================================
-// ADSR PERSONALIZADO (FixedADSR)
+// =============================================================================
+// CONSTANTES DE MODULACIÓN
 //
-// Reemplaza juce::ADSR para corregir el calculo del release cuando noteOff
-// ocurre durante el attack o el decay (antes de que el envelope llegue al
-// nivel de sustain).
+// Índices de destino compartidos por LFO y ModEnv.
+// Añadir un nuevo destino = añadir una entrada aquí + mapearlo en
+// FractalisAudioProcessor::applyModulation().
+// =============================================================================
+enum class ModDestination : int
+{
+    None = 0,
+    // --- Volúmenes de osciladores ---
+    Osc1Volume,
+    Osc2Volume,
+    // --- ADSR OSC 1 ---
+    Osc1Attack,
+    Osc1Decay,
+    Osc1Sustain,
+    Osc1Release,
+    // --- ADSR OSC 2 ---
+    Osc2Attack,
+    Osc2Decay,
+    Osc2Sustain,
+    Osc2Release,
+    // --- Filtro ---
+    FilterCutoff,
+    FilterResonance,
+    Count  // siempre al final, útil para UI
+};
+
+// Nombres legibles para el ComboBox de destino
+static const juce::StringArray kModDestNames {
+    "None",
+    "Osc1 Vol", "Osc2 Vol",
+    "Osc1 Atk", "Osc1 Dec", "Osc1 Sus", "Osc1 Rel",
+    "Osc2 Atk", "Osc2 Dec", "Osc2 Sus", "Osc2 Rel",
+    "Flt Cutoff", "Flt Res"
+};
+
+// =============================================================================
+// FixedADSR — ADSR con release calibrado desde el valor actual del envelope
 //
-// PROBLEMA con juce::ADSR:
-//   releaseRate se precalcula como  sustain / (release x sampleRate).
-//   Eso esta calibrado para bajar DESDE el nivel sustain hasta 0.
-//   Si noteOff llega mientras envelopeVal > sustain, el tiempo real es:
-//       (envelopeVal / sustain) x release
-//   Ejemplo: sustain = 0.18, release = 5 s, envelopeVal = 1.0  ->  27 s.
-//   Tocar fuerte/rapido suelta la nota durante el attack, antes de que
-//   el envelope baje al sustain, reproduciendo exactamente ese escenario.
-//
-// SOLUCION:
-//   En noteOff(), releaseRate se calcula desde el valor ACTUAL del envelope.
-//   Garantia: el fade dura exactamente params.release segundos sin importar
-//   en que fase del ADSR se llame noteOff().
-//==============================================================================
+// Corrige el bug de juce::ADSR donde el release dura más de lo configurado
+// cuando noteOff llega durante el attack o decay (antes de llegar al sustain).
+// =============================================================================
 class FixedADSR
 {
 public:
-    // Constructor por defecto explicito requerido por MSVC cuando la clase
-    // se usa como miembro de valor (no en heap). No necesita leak detector
-    // porque su lifetime esta ligado al FractalisAudioProcessor que si lo tiene.
     FixedADSR() = default;
-
-    // Reutilizamos la estructura de parametros de JUCE para compatibilidad directa
     using Parameters = juce::ADSR::Parameters;
 
-    void setSampleRate (double sr) noexcept
-    {
-        sampleRate = sr;
-    }
+    void setSampleRate (double sr) noexcept { sampleRate = sr; }
 
-    // Recalcula attack y decay.
-    // NO toca releaseRate: se calcula en noteOff() a partir del valor actual.
     void setParameters (const Parameters& p) noexcept
     {
         params     = p;
-        attackRate = 1.0f / (juce::jmax (params.attack, 0.001f) * (float) sampleRate);
+        attackRate = 1.0f / (juce::jmax (params.attack,  0.001f) * (float) sampleRate);
         decayRate  = (1.0f - params.sustain)
                      / (juce::jmax (params.decay, 0.001f) * (float) sampleRate);
     }
 
-    // noteOn siempre arranca desde cero (comportamiento clasico de sintetizador)
     void noteOn() noexcept
     {
         envelopeVal = 0.0f;
         state       = State::Attack;
     }
 
-    // noteOff calcula releaseRate desde envelopeVal en este instante exacto.
-    // Garantia: el fade a 0 tarda exactamente params.release segundos,
-    // sin importar si noteOff llego durante attack, decay o sustain.
+    // Release calculado desde el valor ACTUAL del envelope — garantiza duración exacta.
     void noteOff() noexcept
     {
-        if (state == State::Idle)
-            return;
-
-        // Si el envelope ya esta en 0 (nota soltada antes de empezar),
-        // ir directo a idle sin calcular rates.
-        if (envelopeVal <= 0.0f)
-        {
-            reset();
-            return;
-        }
+        if (state == State::Idle) return;
+        if (envelopeVal <= 0.0f) { reset(); return; }
 
         const float t = juce::jmax (params.release, 0.001f);
         releaseRate   = envelopeVal / (t * (float) sampleRate);
@@ -95,42 +100,32 @@ public:
                 if (envelopeVal >= 1.0f)
                 {
                     envelopeVal = 1.0f;
-                    // Omitir decay si sustain ya esta en 1.0
                     state = (params.sustain < 1.0f) ? State::Decay : State::Sustain;
                 }
                 break;
-
             case State::Decay:
                 envelopeVal -= decayRate;
                 if (envelopeVal <= params.sustain)
                 {
                     envelopeVal = params.sustain;
-                    state       = State::Sustain;
+                    state = State::Sustain;
                 }
                 break;
-
             case State::Sustain:
-                // Mantener el nivel de sustain mientras la nota este presionada
                 envelopeVal = params.sustain;
                 break;
-
             case State::Release:
                 envelopeVal -= releaseRate;
-                if (envelopeVal <= 0.0f)
-                {
-                    reset();
-                    return 0.0f;
-                }
+                if (envelopeVal <= 0.0f) { reset(); return 0.0f; }
                 break;
-
             default:
                 return 0.0f;
         }
-
         return envelopeVal;
     }
 
-    bool isActive() const noexcept { return state != State::Idle; }
+    bool  isActive() const noexcept { return state != State::Idle; }
+    float getValue() const noexcept { return envelopeVal; }
 
     void reset() noexcept
     {
@@ -147,21 +142,85 @@ private:
     float      envelopeVal  = 0.0f;
     float      attackRate   = 0.0f;
     float      decayRate    = 0.0f;
-    float      releaseRate  = 0.0f;  // Solo se escribe en noteOff(), nunca en setParameters()
+    float      releaseRate  = 0.0f;  // Solo se escribe en noteOff()
 };
-// FIN de FixedADSR
 
 
-//==============================================================================
+// =============================================================================
+// SVFilter — State Variable Filter de 2do orden
+//
+// Implementación de Zavalishin (The Art of VA Filter Design, 2018).
+// Produce simultáneamente LP, HP, BP y Notch sin cambiar coeficientes.
+// Modos: 0=LP, 1=HP, 2=BP, 3=Notch
+//
+// Variables de estado (ic1eq, ic2eq) persisten entre bloques para continuidad.
+// =============================================================================
+class SVFilter
+{
+public:
+    SVFilter() = default;
+
+    void setSampleRate (double sr) noexcept { sampleRate = sr; }
+
+    // Recalcula coeficientes. Llamar una vez por bloque (no por muestra).
+    // cutoffHz rango: 20–20000 Hz  |  resonance rango: 0.1–10
+    void setParameters (float cutoffHz, float resonance) noexcept
+    {
+        const float clampedCutoff = juce::jlimit (20.0f, 20000.0f, cutoffHz);
+        const float clampedRes    = juce::jlimit (0.1f,  10.0f,    resonance);
+
+        // g = tan(π * fc / fs) — coeficiente de integración
+        g  = std::tan (juce::MathConstants<float>::pi * clampedCutoff / (float) sampleRate);
+        // k = 1/Q donde Q ≈ resonance
+        k  = 1.0f / clampedRes;
+        a1 = 1.0f / (1.0f + g * (g + k));
+        a2 = g * a1;
+        a3 = g * a2;
+    }
+
+    // Procesa una muestra. Devuelve la salida según el modo activo.
+    float processSample (float input) noexcept
+    {
+        const float v3 = input - ic2eq;
+        const float v1 = a1 * ic1eq + a2 * v3;
+        const float v2 = ic2eq + a2 * ic1eq + a3 * v3;
+
+        ic1eq = 2.0f * v1 - ic1eq;
+        ic2eq = 2.0f * v2 - ic2eq;
+
+        switch (mode)
+        {
+            case 0: return v2;              // LP
+            case 1: return input - k*v1 - v2; // HP
+            case 2: return v1;              // BP
+            case 3: return input - k*v1;    // Notch
+            default: return v2;
+        }
+    }
+
+    void setMode (int m) noexcept { mode = juce::jlimit (0, 3, m); }
+
+    void reset() noexcept { ic1eq = ic2eq = 0.0f; }
+
+private:
+    double sampleRate = 44100.0;
+    float  g = 0.0f, k = 0.0f;
+    float  a1 = 0.0f, a2 = 0.0f, a3 = 0.0f;
+    float  ic1eq = 0.0f, ic2eq = 0.0f;  // variables de estado internas
+    int    mode = 0;
+};
+
+
+// =============================================================================
 // FRACTALIS AUDIO PROCESSOR
-//==============================================================================
+// =============================================================================
 class FractalisAudioProcessor : public juce::AudioProcessor
 {
 public:
     FractalisAudioProcessor();
     ~FractalisAudioProcessor() override;
 
-    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
+    void prepareToPlay  (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 
    #ifndef JucePlugin_PreferredChannelConfigurations
@@ -174,122 +233,73 @@ public:
     bool hasEditor() const override;
 
     const juce::String getName() const override;
-    bool acceptsMidi() const override;
-    bool producesMidi() const override;
-    bool isMidiEffect() const override;
+    bool   acceptsMidi()  const override;
+    bool   producesMidi() const override;
+    bool   isMidiEffect() const override;
     double getTailLengthSeconds() const override;
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override;
-    void setCurrentProgram (int index) override;
-    const juce::String getProgramName (int index) override;
+    int  getNumPrograms()  override;
+    int  getCurrentProgram() override;
+    void setCurrentProgram  (int index) override;
+    const juce::String getProgramName    (int index) override;
     void changeProgramName (int index, const juce::String& newName) override;
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // =========================================================================
-    // APVTS (AudioProcessorValueTreeState)
+    // -------------------------------------------------------------------------
+    // APVTS — sistema central de parámetros
     //
-    // Sistema central de parametros de JUCE. Maneja automaticamente:
-    //   - Automatizacion en el DAW
-    //   - Guardado y carga de presets
-    //   - Sincronizacion bidireccional con controles de la GUI
-    //
-    // Parametros de OSC 1: osc1Enabled, osc1WaveType, osc1Volume,
-    //                      osc1Attack, osc1Decay, osc1Sustain, osc1Release
-    // Parametros de OSC 2: osc2Enabled, osc2WaveType, osc2Volume,
-    //                      osc2Attack, osc2Decay, osc2Sustain, osc2Release
-    // =========================================================================
+    // Parámetros OSC 1/2 (7 c/u), Filtro (3), LFO (4), ModEnv (6)
+    // -------------------------------------------------------------------------
     juce::AudioProcessorValueTreeState apvts;
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
-    // =========================================================================
-    // COMUNICACION MIDI -> GUI (thread-safe)
-    //
-    // El hilo de audio escribe aqui la nota activa; el hilo de GUI lo lee
-    // periodicamente (via Timer) para animar el teclado sin bloqueos.
-    //
-    // Convencion de valores:
-    //   -1  = ninguna nota activa (noteOff o allNotesOff)
-    //   0-127 = numero de nota MIDI actualmente sonando
-    //
-    // std::atomic garantiza lecturas/escrituras atomicas entre hilos sin
-    // necesitar un mutex, lo cual es obligatorio en el hilo de audio.
-    // =========================================================================
+    // Comunicación hilo de audio → GUI (leer nota activa para el teclado)
     std::atomic<int> lastMidiNote { -1 };
 
 private:
     // =========================================================================
-    // ESTADO DE LA NOTA MIDI
-    //
-    // Ambos osciladores comparten la misma nota MIDI (tocan al unsono).
-    // El phaseIncrement se calcula una sola vez al recibir el noteOn.
-    //
-    // noteOnVelocity guarda la velocity del ultimo noteOn y NO se resetea
-    // en noteOff, porque el ADSR necesita seguir escalando el audio durante
-    // la etapa de Release. Ponerla a 0 en noteOff cortaria el release
-    // instantaneamente antes de que el envelope pueda hacer su fade out.
+    // ESTADO DE NOTA MIDI
     // =========================================================================
     double currentFrequency = 440.0;
     double phaseIncrement   = 0.0;
     bool   noteIsActive     = false;
-    //float  noteOnVelocity   = 0.0f;
+    int    heldNoteCount    = 0;
 
-    // =========================================================================
-    // ACUMULADORES DE FASE
-    //
-    // Cada oscilador tiene su propio acumulador de fase (0.0 a 1.0).
-    // Representan la posicion actual dentro del ciclo de la onda.
-    // Tenerlos separados permite que cada oscilador funcione de forma
-    // independiente (por ejemplo, si en el futuro se agregan detuning
-    // o formas de onda que se reinician de forma distinta).
-    // =========================================================================
+    // Acumuladores de fase (0.0–1.0) de ambos osciladores
     double osc1Phase = 0.0;
     double osc2Phase = 0.0;
 
-    // =========================================================================
-    // ENVELOPES ADSR
-    //
-    // FixedADSR reemplaza juce::ADSR para garantizar que el release dure
-    // exactamente el tiempo configurado, independientemente de la fase en
-    // que se llame noteOff(). Ver la clase FixedADSR para el detalle tecnico.
-    //
-    // El ADSR tiene cuatro etapas:
-    //   Attack  (ATK): tiempo que tarda en llegar de 0 a 1 al presionar la tecla
-    //   Decay   (DCY): tiempo que tarda en bajar de 1 al nivel de sustain
-    //   Sustain (SUS): nivel que mantiene mientras la tecla esta presionada
-    //   Release (REL): tiempo que tarda en llegar a 0 al soltar la tecla
-    // =========================================================================
-    FixedADSR adsr1;
-    FixedADSR adsr2;
+    // Fase del LFO (0.0–1.0), avanza independientemente de notas
+    double lfoPhase = 0.0;
 
     // =========================================================================
-    // SEGUIMIENTO DE NOTAS PRESIONADAS
-    //
-    // Cuenta cuantas teclas MIDI estan actualmente presionadas.
-    // El release del ADSR se dispara SOLO cuando este contador llega a 0,
-    // evitando que acordes o notas solapadas reinicien el timer de release
-    // con cada noteOff individual.
+    // MÓDULOS DE AUDIO
     // =========================================================================
-    int heldNoteCount = 0;
+    FixedADSR adsr1;    // Envelope oscilador 1
+    FixedADSR adsr2;    // Envelope oscilador 2
+    FixedADSR modEnv;   // Envelope de modulación (no afecta audio directamente)
+    SVFilter  filter;   // Filtro State Variable — procesa la salida mezclada
 
     // =========================================================================
     // GENERADORES DE ONDA
-    //
-    // generateWave() es el dispatcher: recibe el tipo de onda (0-3) y
-    // llama al generador correspondiente.
-    //
-    // Cada generador individual recibe la fase actual (0.0 a 1.0) y
-    // devuelve una muestra de audio en el rango [-1.0, 1.0].
     // =========================================================================
-    float generateWave     (double currentPhase, int waveType);
-    float generateSine     (double currentPhase);
-    float generateSaw      (double currentPhase);
-    float generateSquare   (double currentPhase);
-    float generateTriangle (double currentPhase);
+    float  generateWave     (double phase, int waveType);
+    float  generateSine     (double phase);
+    float  generateSaw      (double phase);
+    float  generateSquare   (double phase);
+    float  generateTriangle (double phase);
 
-    // Convierte un numero de nota MIDI (0-127) a frecuencia en Hz
+    // =========================================================================
+    // MODULACIÓN
+    //
+    // applyModulation() recibe el valor normalizado del modulador (−1 a +1 para
+    // el LFO, 0 a +1 para ModEnv) y lo suma al parámetro destino dentro del
+    // rango válido de ese parámetro.  Devuelve el valor modulado final.
+    // =========================================================================
+    float applyModulation (ModDestination dest, float baseValue, float modValue);
+
     double midiNoteToFrequency (int midiNote);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FractalisAudioProcessor)

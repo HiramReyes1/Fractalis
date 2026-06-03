@@ -1,49 +1,59 @@
 /*
   ==============================================================================
-    PluginEditor.cpp
+    PluginEditor.cpp — Fractalis Synthesizer v0.2
 
-    Construye, estiliza, posiciona y conecta todos los controles de la GUI.
-    La ventana tiene 820 x 560 pixeles: dos paneles de oscilador en la parte
-    superior y un teclado de piano animado en la parte inferior.
+    Ventana: 820 × 680 px
+      Fila 1 (y 57–370)  : OSC 1 (izquierda) | OSC 2 (derecha)
+      Fila 2 (y 375–570)  : LFO | MOD ENV | FILTER
+      Piano  (y 578–670)  : teclado MIDI animado
   ==============================================================================
 */
 
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-//==============================================================================
-// PALETA DE COLORES
-//
-// Definidos como constantes en un namespace para facil acceso y modificacion.
-// El formato es 0xAARRGGBB (alpha, red, green, blue en hexadecimal).
-//==============================================================================
+// =============================================================================
+// PALETA DE COLORES (igual que v0.1, definida en namespace para fácil acceso)
+// =============================================================================
 namespace FractalisColors
 {
-    const juce::Colour background  { 0xFF0a0a0a };  // Negro profundo (fondo general)
-    const juce::Colour surface     { 0xFF111111 };  // Superficie oscura (fondo de controles)
-    const juce::Colour panel       { 0xFF141a14 };  // Verde muy oscuro (fondo de paneles)
-    const juce::Colour darkGreen   { 0xFF1a4a1a };  // Verde oscuro (bordes, outlines)
-    const juce::Colour accent      { 0xFF00c853 };  // Verde brillante (elementos activos)
-    const juce::Colour separator   { 0xFF1f3f1f };  // Verde muy oscuro (divisores)
-    const juce::Colour textPrimary { 0xFFe0ffe0 };  // Verde blancuzco (texto principal)
-    const juce::Colour textSecond  { 0xFF88bb88 };  // Verde apagado (etiquetas secundarias)
+    const juce::Colour background  { 0xFF0a0a0a };
+    const juce::Colour surface     { 0xFF111111 };
+    const juce::Colour panel       { 0xFF141a14 };
+    const juce::Colour darkGreen   { 0xFF1a4a1a };
+    const juce::Colour accent      { 0xFF00c853 };
+    const juce::Colour separator   { 0xFF1f3f1f };
+    const juce::Colour textPrimary { 0xFFe0ffe0 };
+    const juce::Colour textSecond  { 0xFF88bb88 };
+    // Color de acento secundario para paneles de fila 2 (violeta/azul verdoso)
+    const juce::Colour accent2     { 0xFF00b4d8 };
+    const juce::Colour panel2      { 0xFF0d161d };
 }
 
-//==============================================================================
-// HELPER: aplica el estilo Fractalis a un knob rotativo
-//==============================================================================
-void FractalisAudioProcessorEditor::setupKnob (juce::Slider& slider)
+// =============================================================================
+// HELPERS DE ESTILO
+// =============================================================================
+
+// Knob rotativo estilo Fractalis. Si bipolar=true, el punto de inicio
+// está en el centro del arco (útil para Amount del ModEnv y similares).
+void FractalisAudioProcessorEditor::setupKnob (juce::Slider& slider, bool bipolar)
 {
     slider.setSliderStyle (juce::Slider::RotaryVerticalDrag);
-
-    // TextBoxBelow: la caja de texto con el valor numerico aparece debajo del knob.
-    // false = no es de solo lectura (el usuario puede escribir el valor).
-    // 60 x 18 = tamano de la caja de texto en pixeles.
     slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 18);
 
-    slider.setColour (juce::Slider::rotarySliderFillColourId,    FractalisColors::accent);
+    if (bipolar)
+    {
+        // El knob bipolar usa el color de acento secundario
+        slider.setColour (juce::Slider::rotarySliderFillColourId,    FractalisColors::accent2);
+        slider.setColour (juce::Slider::thumbColourId,               FractalisColors::accent2);
+    }
+    else
+    {
+        slider.setColour (juce::Slider::rotarySliderFillColourId,    FractalisColors::accent);
+        slider.setColour (juce::Slider::thumbColourId,               FractalisColors::accent);
+    }
+
     slider.setColour (juce::Slider::rotarySliderOutlineColourId, FractalisColors::darkGreen);
-    slider.setColour (juce::Slider::thumbColourId,               FractalisColors::accent);
     slider.setColour (juce::Slider::textBoxTextColourId,         FractalisColors::textPrimary);
     slider.setColour (juce::Slider::textBoxBackgroundColourId,   FractalisColors::surface);
     slider.setColour (juce::Slider::textBoxOutlineColourId,      FractalisColors::separator);
@@ -51,9 +61,6 @@ void FractalisAudioProcessorEditor::setupKnob (juce::Slider& slider)
     addAndMakeVisible (slider);
 }
 
-//==============================================================================
-// HELPER: aplica el estilo Fractalis a una etiqueta de texto
-//==============================================================================
 void FractalisAudioProcessorEditor::setupLabel (juce::Label& label, const juce::String& text)
 {
     label.setText (text, juce::dontSendNotification);
@@ -63,336 +70,415 @@ void FractalisAudioProcessorEditor::setupLabel (juce::Label& label, const juce::
     addAndMakeVisible (label);
 }
 
-//==============================================================================
-// HELPER: aplica el estilo Fractalis a un ComboBox
-//==============================================================================
 void FractalisAudioProcessorEditor::setupCombo (juce::ComboBox& combo)
 {
-    combo.setColour (juce::ComboBox::backgroundColourId,      FractalisColors::surface);
-    combo.setColour (juce::ComboBox::textColourId,            FractalisColors::textPrimary);
-    combo.setColour (juce::ComboBox::outlineColourId,         FractalisColors::darkGreen);
-    combo.setColour (juce::ComboBox::arrowColourId,           FractalisColors::accent);
-    combo.setColour (juce::ComboBox::focusedOutlineColourId,  FractalisColors::accent);
+    combo.setColour (juce::ComboBox::backgroundColourId,     FractalisColors::surface);
+    combo.setColour (juce::ComboBox::textColourId,           FractalisColors::textPrimary);
+    combo.setColour (juce::ComboBox::outlineColourId,        FractalisColors::darkGreen);
+    combo.setColour (juce::ComboBox::arrowColourId,          FractalisColors::accent);
+    combo.setColour (juce::ComboBox::focusedOutlineColourId, FractalisColors::accent);
     addAndMakeVisible (combo);
 }
 
-//==============================================================================
+// Título de panel con tamaño y color propios
+void FractalisAudioProcessorEditor::setupTitle (juce::Label& label, const juce::String& text)
+{
+    label.setText (text, juce::dontSendNotification);
+    label.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+    label.setColour (juce::Label::textColourId, FractalisColors::accent);
+    addAndMakeVisible (label);
+}
+
+// =============================================================================
 // CONSTRUCTOR
-//
-// Orden de operaciones para cada control:
-//   1. Configurar propiedades visuales (texto, colores, estilo)
-//   2. Llamar addAndMakeVisible() para que JUCE lo agregue y muestre
-//   3. Crear el Attachment para conectarlo al parametro del APVTS
-//
-// Los Attachments deben crearse AL FINAL, despues de que el control
-// ya existe y esta visible.
-//==============================================================================
+// =============================================================================
 FractalisAudioProcessorEditor::FractalisAudioProcessorEditor (FractalisAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     // =========================================================================
     // OSC 1
     // =========================================================================
+    setupTitle (osc1Title, "OSC 1");
 
-    // Titulo del panel
-    osc1Title.setText ("OSC 1", juce::dontSendNotification);
-    osc1Title.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    osc1Title.setColour (juce::Label::textColourId, FractalisColors::accent);
-    addAndMakeVisible (osc1Title);
-
-    // Boton de activacion (ToggleButton = checkbox con texto)
-    // tickColourId = color del tick/check cuando esta activo
-    // tickDisabledColourId = color del indicador cuando esta inactivo
     osc1EnableButton.setButtonText ("ENABLE");
-    osc1EnableButton.setColour (juce::ToggleButton::textColourId,         FractalisColors::textPrimary);
-    osc1EnableButton.setColour (juce::ToggleButton::tickColourId,          FractalisColors::accent);
-    osc1EnableButton.setColour (juce::ToggleButton::tickDisabledColourId,  FractalisColors::darkGreen);
+    osc1EnableButton.setColour (juce::ToggleButton::textColourId,        FractalisColors::textPrimary);
+    osc1EnableButton.setColour (juce::ToggleButton::tickColourId,         FractalisColors::accent);
+    osc1EnableButton.setColour (juce::ToggleButton::tickDisabledColourId, FractalisColors::darkGreen);
     addAndMakeVisible (osc1EnableButton);
     osc1EnableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         audioProcessor.apvts, "osc1Enabled", osc1EnableButton);
 
-    // Selector de forma de onda
-    // Nota: los IDs del ComboBox comienzan en 1, no en 0.
-    // El Attachment traduce entre el indice del APVTS (0-3) y el ID del combo (1-4).
     setupLabel (osc1WaveLabel, "WAVEFORM");
-    osc1WaveCombo.addItem ("Sine",     1);
-    osc1WaveCombo.addItem ("Saw",      2);
-    osc1WaveCombo.addItem ("Square",   3);
-    osc1WaveCombo.addItem ("Triangle", 4);
+    osc1WaveCombo.addItem ("Sine", 1); osc1WaveCombo.addItem ("Saw",      2);
+    osc1WaveCombo.addItem ("Square", 3); osc1WaveCombo.addItem ("Triangle", 4);
     setupCombo (osc1WaveCombo);
     osc1WaveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
         audioProcessor.apvts, "osc1WaveType", osc1WaveCombo);
 
-    // Knobs de volumen y ADSR
-    setupLabel (osc1VolumeLabel,  "VOL");
-    setupLabel (osc1AttackLabel,  "ATTACK");
-    setupLabel (osc1DecayLabel,   "DECAY");
-    setupLabel (osc1SustainLabel, "SUSTAIN");
-    setupLabel (osc1ReleaseLabel, "RELEASE");
+    setupLabel (osc1VolumeLabel,  "VOL");   setupKnob (osc1VolumeSlider);
+    setupLabel (osc1AttackLabel,  "ATTACK"); setupKnob (osc1AttackSlider);
+    setupLabel (osc1DecayLabel,   "DECAY");  setupKnob (osc1DecaySlider);
+    setupLabel (osc1SustainLabel, "SUSTAIN"); setupKnob (osc1SustainSlider);
+    setupLabel (osc1ReleaseLabel, "RELEASE"); setupKnob (osc1ReleaseSlider);
 
-    setupKnob (osc1VolumeSlider);
-    setupKnob (osc1AttackSlider);
-    setupKnob (osc1DecaySlider);
-    setupKnob (osc1SustainSlider);
-    setupKnob (osc1ReleaseSlider);
-
-    osc1VolumeAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc1Volume",  osc1VolumeSlider);
-    osc1AttackAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc1Attack",  osc1AttackSlider);
-    osc1DecayAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc1Decay",   osc1DecaySlider);
-    osc1SustainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc1Sustain", osc1SustainSlider);
-    osc1ReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc1Release", osc1ReleaseSlider);
+    osc1VolumeAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc1Volume",  osc1VolumeSlider);
+    osc1AttackAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc1Attack",  osc1AttackSlider);
+    osc1DecayAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc1Decay",   osc1DecaySlider);
+    osc1SustainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc1Sustain", osc1SustainSlider);
+    osc1ReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc1Release", osc1ReleaseSlider);
 
     // =========================================================================
-    // OSC 2 (estructura identica a OSC 1, parametros distintos)
+    // OSC 2
     // =========================================================================
-
-    osc2Title.setText ("OSC 2", juce::dontSendNotification);
-    osc2Title.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-    osc2Title.setColour (juce::Label::textColourId, FractalisColors::accent);
-    addAndMakeVisible (osc2Title);
+    setupTitle (osc2Title, "OSC 2");
 
     osc2EnableButton.setButtonText ("ENABLE");
-    osc2EnableButton.setColour (juce::ToggleButton::textColourId,         FractalisColors::textPrimary);
-    osc2EnableButton.setColour (juce::ToggleButton::tickColourId,          FractalisColors::accent);
-    osc2EnableButton.setColour (juce::ToggleButton::tickDisabledColourId,  FractalisColors::darkGreen);
+    osc2EnableButton.setColour (juce::ToggleButton::textColourId,        FractalisColors::textPrimary);
+    osc2EnableButton.setColour (juce::ToggleButton::tickColourId,         FractalisColors::accent);
+    osc2EnableButton.setColour (juce::ToggleButton::tickDisabledColourId, FractalisColors::darkGreen);
     addAndMakeVisible (osc2EnableButton);
     osc2EnableAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
         audioProcessor.apvts, "osc2Enabled", osc2EnableButton);
 
     setupLabel (osc2WaveLabel, "WAVEFORM");
-    osc2WaveCombo.addItem ("Sine",     1);
-    osc2WaveCombo.addItem ("Saw",      2);
-    osc2WaveCombo.addItem ("Square",   3);
-    osc2WaveCombo.addItem ("Triangle", 4);
+    osc2WaveCombo.addItem ("Sine", 1); osc2WaveCombo.addItem ("Saw",      2);
+    osc2WaveCombo.addItem ("Square", 3); osc2WaveCombo.addItem ("Triangle", 4);
     setupCombo (osc2WaveCombo);
     osc2WaveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
         audioProcessor.apvts, "osc2WaveType", osc2WaveCombo);
 
-    setupLabel (osc2VolumeLabel,  "VOL");
-    setupLabel (osc2AttackLabel,  "ATTACK");
-    setupLabel (osc2DecayLabel,   "DECAY");
-    setupLabel (osc2SustainLabel, "SUSTAIN");
-    setupLabel (osc2ReleaseLabel, "RELEASE");
+    setupLabel (osc2VolumeLabel,  "VOL");    setupKnob (osc2VolumeSlider);
+    setupLabel (osc2AttackLabel,  "ATTACK"); setupKnob (osc2AttackSlider);
+    setupLabel (osc2DecayLabel,   "DECAY");  setupKnob (osc2DecaySlider);
+    setupLabel (osc2SustainLabel, "SUSTAIN"); setupKnob (osc2SustainSlider);
+    setupLabel (osc2ReleaseLabel, "RELEASE"); setupKnob (osc2ReleaseSlider);
 
-    setupKnob (osc2VolumeSlider);
-    setupKnob (osc2AttackSlider);
-    setupKnob (osc2DecaySlider);
-    setupKnob (osc2SustainSlider);
-    setupKnob (osc2ReleaseSlider);
-
-    osc2VolumeAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc2Volume",  osc2VolumeSlider);
-    osc2AttackAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc2Attack",  osc2AttackSlider);
-    osc2DecayAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc2Decay",   osc2DecaySlider);
-    osc2SustainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc2Sustain", osc2SustainSlider);
-    osc2ReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
-        audioProcessor.apvts, "osc2Release", osc2ReleaseSlider);
+    osc2VolumeAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc2Volume",  osc2VolumeSlider);
+    osc2AttackAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc2Attack",  osc2AttackSlider);
+    osc2DecayAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc2Decay",   osc2DecaySlider);
+    osc2SustainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc2Sustain", osc2SustainSlider);
+    osc2ReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(audioProcessor.apvts, "osc2Release", osc2ReleaseSlider);
 
     // =========================================================================
-    // TECLADO DE PIANO
-    //
-    // Se agrega al editor como componente hijo. El timer se encarga de
-    // leer lastMidiNote del procesador y llamar setActiveNote() para
-    // actualizar la visualizacion sin tocar el hilo de audio.
+    // LFO
+    // =========================================================================
+    setupTitle (lfoTitle, "LFO");
+
+    setupLabel (lfoRateLabel,  "RATE");  setupKnob (lfoRateSlider);
+    setupLabel (lfoDepthLabel, "DEPTH"); setupKnob (lfoDepthSlider);
+
+    setupLabel (lfoWaveLabel, "WAVE");
+    lfoWaveCombo.addItem ("Sine", 1); lfoWaveCombo.addItem ("Saw",      2);
+    lfoWaveCombo.addItem ("Square", 3); lfoWaveCombo.addItem ("Triangle", 4);
+    setupCombo (lfoWaveCombo);
+
+    setupLabel (lfoDestLabel, "DEST");
+    // Añadir destinos de modulación al combo (índices 1..N)
+    for (int i = 0; i < kModDestNames.size(); ++i)
+        lfoDestCombo.addItem (kModDestNames[i], i + 1);
+    setupCombo (lfoDestCombo);
+
+    lfoRateAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "lfoRate",  lfoRateSlider);
+    lfoDepthAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "lfoDepth", lfoDepthSlider);
+    lfoWaveAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "lfoWave",  lfoWaveCombo);
+    lfoDestAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "lfoDest",  lfoDestCombo);
+
+    // =========================================================================
+    // MOD ENV
+    // =========================================================================
+    setupTitle (modEnvTitle, "MOD ENV");
+
+    setupLabel (modEnvAttackLabel,  "ATTACK");  setupKnob (modEnvAttackSlider);
+    setupLabel (modEnvDecayLabel,   "DECAY");   setupKnob (modEnvDecaySlider);
+    setupLabel (modEnvSustainLabel, "SUSTAIN"); setupKnob (modEnvSustainSlider);
+    setupLabel (modEnvReleaseLabel, "RELEASE"); setupKnob (modEnvReleaseSlider);
+
+    // Amount bipolar (−1 a +1) → knob con acento diferenciado
+    setupLabel (modEnvAmountLabel, "AMOUNT");
+    setupKnob (modEnvAmountSlider, /*bipolar=*/true);
+
+    setupLabel (modEnvDestLabel, "DEST");
+    for (int i = 0; i < kModDestNames.size(); ++i)
+        modEnvDestCombo.addItem (kModDestNames[i], i + 1);
+    setupCombo (modEnvDestCombo);
+
+    modEnvAttackAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "modEnvAttack",  modEnvAttackSlider);
+    modEnvDecayAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "modEnvDecay",   modEnvDecaySlider);
+    modEnvSustainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "modEnvSustain", modEnvSustainSlider);
+    modEnvReleaseAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "modEnvRelease", modEnvReleaseSlider);
+    modEnvAmountAttachment  = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "modEnvAmount",  modEnvAmountSlider);
+    modEnvDestAttachment    = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "modEnvDest",    modEnvDestCombo);
+
+    // =========================================================================
+    // FILTER
+    // =========================================================================
+    setupTitle (filterTitle, "FILTER");
+
+    setupLabel (filterCutoffLabel, "CUTOFF"); setupKnob (filterCutoffSlider);
+    setupLabel (filterResLabel,    "RES");    setupKnob (filterResSlider);
+
+    setupLabel (filterModeLabel, "MODE");
+    filterModeCombo.addItem ("LP",    1);
+    filterModeCombo.addItem ("HP",    2);
+    filterModeCombo.addItem ("BP",    3);
+    filterModeCombo.addItem ("Notch", 4);
+    setupCombo (filterModeCombo);
+
+    filterCutoffAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "filterCutoff", filterCutoffSlider);
+    filterResAttachment    = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>  (audioProcessor.apvts, "filterRes",    filterResSlider);
+    filterModeAttachment   = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(audioProcessor.apvts, "filterMode",   filterModeCombo);
+
+    // =========================================================================
+    // PIANO
     // =========================================================================
     addAndMakeVisible (pianoDisplay);
 
-    // Timer a ~33fps: suficiente para animacion fluida sin consumir CPU.
-    // El intervalo de 30ms es mucho mayor que el buffer de audio (~3ms),
-    // por lo que nunca interfiere con el procesamiento de audio.
-    startTimerHz (33);
-
-    // La ventana crece 120px en altura para alojar el teclado en la parte inferior
-    setSize (820, 560);
+    startTimerHz (33);  // ~30ms: suficiente para animación fluida
+    setSize (820, 680);
 }
 
 FractalisAudioProcessorEditor::~FractalisAudioProcessorEditor()
 {
-    // Detener el timer antes de que se destruya el objeto para evitar
-    // callbacks sobre memoria liberada
     stopTimer();
 }
 
-//==============================================================================
-// PAINT
-//
-// Dibuja todos los elementos graficos estaticos (fondos, titulos, lineas).
-// Se llama automaticamente cuando la ventana necesita redibujarse.
-// Los controles JUCE (sliders, combos, etc.) se dibujan solos.
-//==============================================================================
+// =============================================================================
+// PAINT — fondos, títulos y líneas decorativas (los controles se pintan solos)
+// =============================================================================
 void FractalisAudioProcessorEditor::paint (juce::Graphics& g)
 {
-    // Fondo principal
     g.fillAll (FractalisColors::background);
 
-    // Barra de titulo
+    // Barra de título
     g.setColour (FractalisColors::darkGreen);
     g.fillRect (0, 0, getWidth(), 50);
-
-    // Linea de acento debajo del titulo
     g.setColour (FractalisColors::accent);
     g.fillRect (0, 48, getWidth(), 2);
 
-    // Nombre del plugin
     g.setColour (FractalisColors::textPrimary);
     g.setFont (juce::FontOptions (22.0f, juce::Font::bold));
     g.drawFittedText ("FRACTALIS", 0, 0, getWidth(), 36, juce::Justification::centred, 1);
 
-    // Subtitulo
     g.setColour (FractalisColors::textSecond);
     g.setFont (juce::FontOptions (9.0f));
-    g.drawText ("SYNTHESIZER v0.1", 0, 33, getWidth(), 13, juce::Justification::centred);
+    g.drawText ("SYNTHESIZER v0.2", 0, 33, getWidth(), 13, juce::Justification::centred);
 
-    const int halfW = getWidth() / 2;
-
-    // Panel de fondo OSC 1
-    g.setColour (FractalisColors::panel);
-    g.fillRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f);
-    g.setColour (FractalisColors::separator);
-    g.drawRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f, 1.0f);
-
-    // Panel de fondo OSC 2
-    const float osc2X = (float)(halfW + 5);
-    g.setColour (FractalisColors::panel);
-    g.fillRoundedRectangle (osc2X, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f);
-    g.setColour (FractalisColors::separator);
-    g.drawRoundedRectangle (osc2X, 57.0f, (float)(halfW - 15), (float)(440 - 67), 6.0f, 1.0f);
+    const int halfW    = getWidth() / 2;
+    const int thirdW   = getWidth() / 3;
 
     // -------------------------------------------------------------------------
-    // SECCION DEL TECLADO DE PIANO
-    //
-    // Franja oscura de fondo para el area del piano, con separador superior.
-    // El teclado en si lo dibuja PianoKeyboardDisplay::paint().
+    // FILA 1 — Paneles OSC 1 y OSC 2 (y 57 – 370)
     // -------------------------------------------------------------------------
-    const int pianoY = 445;
+    const float osc1PanelH = 310.0f;
 
-    // Fondo de la seccion del piano
+    g.setColour (FractalisColors::panel);
+    g.fillRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f);
+    g.setColour (FractalisColors::separator);
+    g.drawRoundedRectangle (10.0f, 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f, 1.0f);
+
+    g.setColour (FractalisColors::panel);
+    g.fillRoundedRectangle ((float)(halfW + 5), 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f);
+    g.setColour (FractalisColors::separator);
+    g.drawRoundedRectangle ((float)(halfW + 5), 57.0f, (float)(halfW - 15), osc1PanelH, 6.0f, 1.0f);
+
+    // -------------------------------------------------------------------------
+    // FILA 2 — Paneles LFO | MOD ENV | FILTER (y 375 – 570)
+    // -------------------------------------------------------------------------
+    const float row2Y = 375.0f;
+    const float row2H = 190.0f;
+
+    // Separador entre filas
+    g.setColour (FractalisColors::separator);
+    g.fillRect (0, 370, getWidth(), 1);
+    g.setColour (FractalisColors::accent.withAlpha (0.25f));
+    g.fillRect (0, 371, getWidth(), 1);
+
+    // Paneles de fila 2 con color ligeramente diferente para distinguirlos visualmente
+    for (int col = 0; col < 3; ++col)
+    {
+        const float px = 10.0f + col * (thirdW);
+        const float pw = (float) thirdW - 10.0f;
+        g.setColour (FractalisColors::panel2);
+        g.fillRoundedRectangle (px, row2Y, pw, row2H, 6.0f);
+        g.setColour (FractalisColors::darkGreen);
+        g.drawRoundedRectangle (px, row2Y, pw, row2H, 6.0f, 1.0f);
+    }
+
+    // -------------------------------------------------------------------------
+    // PIANO — franja inferior (y 578 – 672)
+    // -------------------------------------------------------------------------
+    const int pianoY = 578;
     g.setColour (juce::Colour (0xFF0d140d));
     g.fillRect (0, pianoY - 5, getWidth(), getHeight() - pianoY + 5);
-
-    // Linea separadora con acento
     g.setColour (FractalisColors::separator);
     g.fillRect (0, pianoY - 5, getWidth(), 1);
     g.setColour (FractalisColors::accent.withAlpha (0.35f));
     g.fillRect (0, pianoY - 4, getWidth(), 1);
-
-    // Etiqueta "MIDI IN" a la izquierda del teclado
     g.setColour (FractalisColors::textSecond);
     g.setFont (juce::FontOptions (8.0f, juce::Font::bold));
     g.drawText ("MIDI IN", 8, pianoY - 3, 44, 10, juce::Justification::centredLeft, false);
 }
 
-//==============================================================================
-// RESIZED
-//
-// Posiciona todos los controles dentro de sus paneles.
-// Se llama al inicio y cada vez que el tamano de ventana cambia.
-//
-// Estrategia de layout: usamos juce::Rectangle<int> y sus metodos
-// removeFromTop() / removeFromLeft() para "consumir" el espacio disponible
-// de arriba hacia abajo y de izquierda a derecha.
-//
-// El mismo bloque de codigo se repite para OSC 1 y OSC 2, operando sobre
-// diferentes areas (a1 y a2) y diferentes controles.
-//==============================================================================
+// =============================================================================
+// RESIZED — posiciona todos los controles usando removeFromTop/Left
+// =============================================================================
 void FractalisAudioProcessorEditor::resized()
 {
-    const int panelMargin = 14;
-    const int halfW       = getWidth() / 2;
-
-    // Los paneles de osciladores ocupan los primeros 440px de altura,
-    // igual que antes. Solo el setSize cambio de 440 a 560.
-    const int oscPanelH = 440;
-
-    // Area de contenido de cada panel (dentro del borde redondeado)
-    auto a1 = juce::Rectangle<int> (10,        57, halfW - 15, oscPanelH - 67).reduced (panelMargin);
-    auto a2 = juce::Rectangle<int> (halfW + 5, 57, halfW - 15, oscPanelH - 67).reduced (panelMargin);
+    const int panelMargin = 12;
+    const int halfW  = getWidth() / 2;
+    const int thirdW = getWidth() / 3;
 
     // =========================================================================
-    // LAYOUT OSC 1
+    // FILA 1 — OSC 1 y OSC 2 (y 57, altura 310)
     // =========================================================================
+    auto a1 = juce::Rectangle<int> (10,        57, halfW - 15, 310).reduced (panelMargin);
+    auto a2 = juce::Rectangle<int> (halfW + 5, 57, halfW - 15, 310).reduced (panelMargin);
 
-    // Fila 1: titulo a la izquierda, boton enable a la derecha
-    auto header1 = a1.removeFromTop (26);
-    osc1Title.setBounds (header1.removeFromLeft (60));
-    osc1EnableButton.setBounds (header1);
-    a1.removeFromTop (8);
+    // Helper lambda para layout de un panel de oscilador
+    auto layoutOscPanel = [&](juce::Rectangle<int>& a,
+                               juce::Label& title, juce::ToggleButton& enableBtn,
+                               juce::Label& waveLabel, juce::ComboBox& waveCombo,
+                               juce::Label& volLbl,  juce::Slider& volSlider,
+                               juce::Label& atkLbl,  juce::Slider& atkSlider,
+                               juce::Label& dcyLbl,  juce::Slider& dcySlider,
+                               juce::Label& susLbl,  juce::Slider& susSlider,
+                               juce::Label& relLbl,  juce::Slider& relSlider)
+    {
+        // Fila: título + enable
+        auto header = a.removeFromTop (26);
+        title.setBounds (header.removeFromLeft (60));
+        enableBtn.setBounds (header);
+        a.removeFromTop (6);
 
-    // Fila 2: etiqueta y combo de forma de onda
-    osc1WaveLabel.setBounds (a1.removeFromTop (16));
-    osc1WaveCombo.setBounds (a1.removeFromTop (26));
-    a1.removeFromTop (12);
+        // Selector de forma de onda
+        waveLabel.setBounds (a.removeFromTop (14));
+        waveCombo.setBounds (a.removeFromTop (24));
+        a.removeFromTop (10);
 
-    // Fila 3 + 4: etiquetas y knobs de VOL/ATK/DCY/SUS/REL
-    // Cada knob ocupa 1/5 del ancho disponible
-    const int knobW1 = a1.getWidth() / 5;
+        // Etiquetas y knobs (5 columnas)
+        const int kw = a.getWidth() / 5;
+        auto lblRow = a.removeFromTop (14);
+        volLbl.setBounds (lblRow.removeFromLeft (kw)); atkLbl.setBounds (lblRow.removeFromLeft (kw));
+        dcyLbl.setBounds (lblRow.removeFromLeft (kw)); susLbl.setBounds (lblRow.removeFromLeft (kw));
+        relLbl.setBounds (lblRow.removeFromLeft (kw));
 
-    auto labels1 = a1.removeFromTop (15);
-    osc1VolumeLabel.setBounds  (labels1.removeFromLeft (knobW1));
-    osc1AttackLabel.setBounds  (labels1.removeFromLeft (knobW1));
-    osc1DecayLabel.setBounds   (labels1.removeFromLeft (knobW1));
-    osc1SustainLabel.setBounds (labels1.removeFromLeft (knobW1));
-    osc1ReleaseLabel.setBounds (labels1.removeFromLeft (knobW1));
+        auto kRow = a.removeFromTop (juce::jmin (a.getHeight(), 115));
+        volSlider.setBounds (kRow.removeFromLeft (kw)); atkSlider.setBounds (kRow.removeFromLeft (kw));
+        dcySlider.setBounds (kRow.removeFromLeft (kw)); susSlider.setBounds (kRow.removeFromLeft (kw));
+        relSlider.setBounds (kRow.removeFromLeft (kw));
+    };
 
-    // Los knobs toman el espacio restante (con un maximo de 120px de alto)
-    auto knobs1 = a1.removeFromTop (juce::jmin (a1.getHeight(), 120));
-    osc1VolumeSlider.setBounds  (knobs1.removeFromLeft (knobW1));
-    osc1AttackSlider.setBounds  (knobs1.removeFromLeft (knobW1));
-    osc1DecaySlider.setBounds   (knobs1.removeFromLeft (knobW1));
-    osc1SustainSlider.setBounds (knobs1.removeFromLeft (knobW1));
-    osc1ReleaseSlider.setBounds (knobs1.removeFromLeft (knobW1));
+    layoutOscPanel (a1,
+        osc1Title, osc1EnableButton, osc1WaveLabel, osc1WaveCombo,
+        osc1VolumeLabel, osc1VolumeSlider, osc1AttackLabel,  osc1AttackSlider,
+        osc1DecayLabel,  osc1DecaySlider,  osc1SustainLabel, osc1SustainSlider,
+        osc1ReleaseLabel, osc1ReleaseSlider);
 
-    // =========================================================================
-    // LAYOUT OSC 2 (identico a OSC 1, opera sobre a2)
-    // =========================================================================
-
-    auto header2 = a2.removeFromTop (26);
-    osc2Title.setBounds (header2.removeFromLeft (60));
-    osc2EnableButton.setBounds (header2);
-    a2.removeFromTop (8);
-
-    osc2WaveLabel.setBounds (a2.removeFromTop (16));
-    osc2WaveCombo.setBounds (a2.removeFromTop (26));
-    a2.removeFromTop (12);
-
-    const int knobW2 = a2.getWidth() / 5;
-
-    auto labels2 = a2.removeFromTop (15);
-    osc2VolumeLabel.setBounds  (labels2.removeFromLeft (knobW2));
-    osc2AttackLabel.setBounds  (labels2.removeFromLeft (knobW2));
-    osc2DecayLabel.setBounds   (labels2.removeFromLeft (knobW2));
-    osc2SustainLabel.setBounds (labels2.removeFromLeft (knobW2));
-    osc2ReleaseLabel.setBounds (labels2.removeFromLeft (knobW2));
-
-    auto knobs2 = a2.removeFromTop (juce::jmin (a2.getHeight(), 120));
-    osc2VolumeSlider.setBounds  (knobs2.removeFromLeft (knobW2));
-    osc2AttackSlider.setBounds  (knobs2.removeFromLeft (knobW2));
-    osc2DecaySlider.setBounds   (knobs2.removeFromLeft (knobW2));
-    osc2SustainSlider.setBounds (knobs2.removeFromLeft (knobW2));
-    osc2ReleaseSlider.setBounds (knobs2.removeFromLeft (knobW2));
+    layoutOscPanel (a2,
+        osc2Title, osc2EnableButton, osc2WaveLabel, osc2WaveCombo,
+        osc2VolumeLabel, osc2VolumeSlider, osc2AttackLabel,  osc2AttackSlider,
+        osc2DecayLabel,  osc2DecaySlider,  osc2SustainLabel, osc2SustainSlider,
+        osc2ReleaseLabel, osc2ReleaseSlider);
 
     // =========================================================================
-    // LAYOUT DEL TECLADO DE PIANO
-    //
-    // Ocupa toda la anchura con margenes laterales de 10px.
-    // Se posiciona en la franja inferior, dejando 8px de padding vertical.
-    // La altura de 95px da espacio suficiente para teclas blancas y negras
-    // con las etiquetas de octava visibles.
+    // FILA 2 — LFO | MOD ENV | FILTER (y 375, altura 190)
     // =========================================================================
-    const int pianoMargin  = 10;
-    const int pianoTop     = oscPanelH + 8;           // 448px desde arriba
-    const int pianoHeight  = getHeight() - pianoTop - 8;  // ~104px
+    const int row2Y = 375;
+    const int row2H = 190;
 
-    pianoDisplay.setBounds (pianoMargin,
-                            pianoTop,
-                            getWidth() - pianoMargin * 2,
-                            pianoHeight);
+    auto lfoArea    = juce::Rectangle<int> (10,           row2Y, thirdW - 10,  row2H).reduced (panelMargin);
+    auto modEnvArea = juce::Rectangle<int> (thirdW + 0,   row2Y, thirdW - 10,  row2H).reduced (panelMargin);
+    auto filterArea = juce::Rectangle<int> (thirdW * 2,   row2Y, thirdW - 10,  row2H).reduced (panelMargin);
+
+    // -------------------------------------------------------------------------
+    // LFO — título, Rate, Depth (knobs), Wave + Dest (combos)
+    // -------------------------------------------------------------------------
+    {
+        auto& a = lfoArea;
+        lfoTitle.setBounds (a.removeFromTop (20));
+        a.removeFromTop (4);
+
+        // Knobs Rate y Depth en dos columnas
+        const int kw = a.getWidth() / 2;
+        auto lblRow = a.removeFromTop (14);
+        lfoRateLabel.setBounds  (lblRow.removeFromLeft (kw));
+        lfoDepthLabel.setBounds (lblRow);
+
+        auto kRow = a.removeFromTop (80);
+        lfoRateSlider.setBounds  (kRow.removeFromLeft (kw));
+        lfoDepthSlider.setBounds (kRow);
+
+        // Wave y Dest en filas separadas
+        lfoWaveLabel.setBounds (a.removeFromTop (13));
+        lfoWaveCombo.setBounds (a.removeFromTop (22));
+        a.removeFromTop (4);
+        lfoDestLabel.setBounds (a.removeFromTop (13));
+        lfoDestCombo.setBounds (a.removeFromTop (22));
+    }
+
+    // -------------------------------------------------------------------------
+    // MOD ENV — título, 4 knobs ADSR + Amount, Dest combo
+    // -------------------------------------------------------------------------
+    {
+        auto& a = modEnvArea;
+        modEnvTitle.setBounds (a.removeFromTop (20));
+        a.removeFromTop (4);
+
+        // Primera fila de knobs: ATK / DCY / SUS / REL
+        const int kw4 = a.getWidth() / 4;
+        auto lblRow1 = a.removeFromTop (14);
+        modEnvAttackLabel.setBounds  (lblRow1.removeFromLeft (kw4));
+        modEnvDecayLabel.setBounds   (lblRow1.removeFromLeft (kw4));
+        modEnvSustainLabel.setBounds (lblRow1.removeFromLeft (kw4));
+        modEnvReleaseLabel.setBounds (lblRow1);
+
+        auto kRow1 = a.removeFromTop (72);
+        modEnvAttackSlider.setBounds  (kRow1.removeFromLeft (kw4));
+        modEnvDecaySlider.setBounds   (kRow1.removeFromLeft (kw4));
+        modEnvSustainSlider.setBounds (kRow1.removeFromLeft (kw4));
+        modEnvReleaseSlider.setBounds (kRow1);
+
+        // Segunda fila: Amount (knob) + Dest (combo)
+        const int amountW = a.getWidth() / 2;
+        auto lblRow2 = a.removeFromTop (14);
+        modEnvAmountLabel.setBounds (lblRow2.removeFromLeft (amountW));
+        modEnvDestLabel.setBounds   (lblRow2);
+
+        auto row2 = a.removeFromTop (juce::jmin (a.getHeight(), 50));
+        auto amtArea  = row2.removeFromLeft (amountW);
+        modEnvAmountSlider.setBounds (amtArea);
+        // Dest combo centrado verticalmente en la mitad del espacio disponible
+        modEnvDestCombo.setBounds (row2.withSizeKeepingCentre (row2.getWidth(), 22));
+    }
+
+    // -------------------------------------------------------------------------
+    // FILTER — título, Cutoff + Res (knobs), Mode (combo)
+    // -------------------------------------------------------------------------
+    {
+        auto& a = filterArea;
+        filterTitle.setBounds (a.removeFromTop (20));
+        a.removeFromTop (4);
+
+        const int kw = a.getWidth() / 2;
+        auto lblRow = a.removeFromTop (14);
+        filterCutoffLabel.setBounds (lblRow.removeFromLeft (kw));
+        filterResLabel.setBounds    (lblRow);
+
+        auto kRow = a.removeFromTop (80);
+        filterCutoffSlider.setBounds (kRow.removeFromLeft (kw));
+        filterResSlider.setBounds    (kRow);
+
+        filterModeLabel.setBounds (a.removeFromTop (13));
+        filterModeCombo.setBounds (a.removeFromTop (22));
+    }
+
+    // =========================================================================
+    // PIANO — franja inferior (y 578, altura dinámica hasta el borde)
+    // =========================================================================
+    const int pianoMargin = 10;
+    const int pianoTop    = 578;
+    const int pianoHeight = getHeight() - pianoTop - 8;
+
+    pianoDisplay.setBounds (pianoMargin, pianoTop,
+                            getWidth() - pianoMargin * 2, pianoHeight);
 }
