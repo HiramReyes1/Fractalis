@@ -114,9 +114,14 @@ FractalisAudioProcessor::~FractalisAudioProcessor() {}
 // =============================================================================
 void FractalisAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
-    adsr1.setSampleRate  (sampleRate);
-    adsr2.setSampleRate  (sampleRate);
+    for (auto& v : voices)
+    {
+        v.adsr1.setSampleRate (sampleRate);
+        v.adsr2.setSampleRate (sampleRate);
+        v.reset();
+    }
     modEnv.setSampleRate (sampleRate);
+    modEnv.reset();
     filter.setSampleRate (sampleRate);
     filter.reset();
     lfoPhase = 0.0;
@@ -193,6 +198,25 @@ float FractalisAudioProcessor::applyModulation (ModDestination dest,
     }
 
     return out;
+}
+
+// Devuelve una voz libre, o roba la más silenciosa si todas están ocupadas.
+SynthVoice* FractalisAudioProcessor::findFreeVoice() noexcept
+{
+    // 1. Buscar voz completamente inactiva
+    for (auto& v : voices)
+        if (!v.isActive()) return &v;
+
+    // 2. Voice stealing: la voz con el envelope más bajo (menos audible)
+    SynthVoice* steal = &voices[0];
+    float lowest = voices[0].adsr1.getValue();
+    for (auto& v : voices)
+    {
+        const float val = v.adsr1.getValue();
+        if (val < lowest) { lowest = val; steal = &v; }
+    }
+    steal->reset();
+    return steal;
 }
 
 // =============================================================================
@@ -318,11 +342,16 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     applyMod (modEnvDest, modEnvValue);
 
     // -------------------------------------------------------------------------
-    // 5. CONFIGURAR ADSR Y FILTRO CON VALORES MODULADOS
+    // 5. CONFIGURAR ADSR DE TODAS LAS VOCES ACTIVAS Y FILTRO
     // -------------------------------------------------------------------------
-    adsr1.setParameters (adsr1Base);
-    adsr2.setParameters (adsr2Base);
-
+    for (auto& v : voices)
+    {
+        if (v.isActive())
+        {
+            v.adsr1.setParameters (adsr1Base);
+            v.adsr2.setParameters (adsr2Base);
+        }
+    }
     filter.setMode (filterMode);
     filter.setParameters (filterCutoff, filterRes);
 
@@ -335,42 +364,45 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         if (message.isNoteOn())
         {
-            heldNoteCount++;
-            noteIsActive     = true;
-            currentFrequency = midiNoteToFrequency (message.getNoteNumber());
-            phaseIncrement   = currentFrequency / getSampleRate();
-
-            // Reiniciar fases para evitar clicks al inicio de nota
-            osc1Phase = 0.0;
-            osc2Phase = 0.0;
-
-            adsr1.noteOn();
-            adsr2.noteOn();
-            modEnv.noteOn();  // ModEnv se dispara con cada noteOn
-
+            SynthVoice* voice = findFreeVoice();
+            voice->midiNote  = message.getNoteNumber();
+            voice->frequency = midiNoteToFrequency (message.getNoteNumber());
+            voice->phaseInc  = voice->frequency / getSampleRate();
+            voice->osc1Phase = 0.0;
+            voice->osc2Phase = 0.0;
+            voice->adsr1.setParameters (adsr1Base);
+            voice->adsr2.setParameters (adsr2Base);
+            voice->adsr1.noteOn();
+            voice->adsr2.noteOn();
+            modEnv.noteOn();   // ModEnv global: retrigger en cada nota
             lastMidiNote.store (message.getNoteNumber());
         }
         else if (message.isNoteOff())
         {
-            heldNoteCount = juce::jmax (0, heldNoteCount - 1);
-
-            // Release solo cuando no quedan teclas presionadas (fix de acordes)
-            if (heldNoteCount == 0)
+            const int note = message.getNoteNumber();
+            for (auto& v : voices)
             {
-                noteIsActive = false;
-                adsr1.noteOff();
-                adsr2.noteOff();
+                if (v.midiNote == note)
+                {
+                    v.adsr1.noteOff();
+                    v.adsr2.noteOff();
+                    v.midiNote = -1;
+                    break;  // Solo libera la primera voz con esa nota
+                }
+            }
+            // Liberar modEnv solo si no queda ninguna tecla presionada
+            bool anyHeld = false;
+            for (const auto& v : voices)
+                if (v.midiNote != -1) { anyHeld = true; break; }
+            if (!anyHeld)
+            {
                 modEnv.noteOff();
                 lastMidiNote.store (-1);
             }
         }
         else if (message.isAllNotesOff())
         {
-            heldNoteCount = 0;
-            noteIsActive  = false;
-            osc1Phase = osc2Phase = 0.0;
-            adsr1.reset();
-            adsr2.reset();
+            for (auto& v : voices) v.reset();
             modEnv.reset();
             filter.reset();
             lastMidiNote.store (-1);
@@ -378,7 +410,7 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     // -------------------------------------------------------------------------
-    // 7. GENERAR AUDIO — osciladores → mezcla → filtro → salida
+    // 7. GENERAR AUDIO — suma de voces → filtro → salida
     // -------------------------------------------------------------------------
     auto* leftChannel  = buffer.getWritePointer (0);
     auto* rightChannel = buffer.getWritePointer (1);
@@ -386,33 +418,39 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        float osc1Out = 0.0f;
-        float osc2Out = 0.0f;
+        float mixed = 0.0f;
 
-        if (adsr1.isActive())
+        for (auto& voice : voices)
         {
-            const float wave1 = generateWave (osc1Phase, osc1WaveType);
-            const float env1  = adsr1.getNextSample();
-            if (osc1Enabled) osc1Out = wave1 * env1 * osc1Volume;
+            if (!voice.isActive()) continue;
 
-            osc1Phase += phaseIncrement;
-            if (osc1Phase >= 1.0) osc1Phase -= 1.0;
+            float osc1Out = 0.0f, osc2Out = 0.0f;
+
+            // OSC 1
+            {
+                const float env1  = voice.adsr1.getNextSample();
+                const float wave1 = generateWave (voice.osc1Phase, osc1WaveType);
+                voice.osc1Phase += voice.phaseInc;
+                if (voice.osc1Phase >= 1.0) voice.osc1Phase -= 1.0;
+                if (osc1Enabled) osc1Out = wave1 * env1 * osc1Volume;
+            }
+
+            // OSC 2
+            if (voice.adsr2.isActive())
+            {
+                const float env2  = voice.adsr2.getNextSample();
+                const float wave2 = generateWave (voice.osc2Phase, osc2WaveType);
+                voice.osc2Phase += voice.phaseInc;
+                if (voice.osc2Phase >= 1.0) voice.osc2Phase -= 1.0;
+                if (osc2Enabled) osc2Out = wave2 * env2 * osc2Volume;
+            }
+
+            mixed += (osc1Out + osc2Out) * 0.5f;
         }
 
-        if (adsr2.isActive())
-        {
-            const float wave2 = generateWave (osc2Phase, osc2WaveType);
-            const float env2  = adsr2.getNextSample();
-            if (osc2Enabled) osc2Out = wave2 * env2 * osc2Volume;
+        // Normalizar por número máximo de voces — evita clipping con acordes
+        mixed *= (1.0f / static_cast<float> (kMaxVoices));
 
-            osc2Phase += phaseIncrement;
-            if (osc2Phase >= 1.0) osc2Phase -= 1.0;
-        }
-
-        // Mezcla 50/50 para evitar clipping con ambos osciladores al máximo
-        float mixed = (osc1Out + osc2Out) * 0.5f;
-
-        // Pasar la mezcla por el filtro SVF
         mixed = filter.processSample (mixed);
 
         leftChannel [sample] = mixed;
