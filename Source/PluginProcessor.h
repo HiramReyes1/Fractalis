@@ -300,7 +300,16 @@ public:
     // Comunicación hilo de audio → GUI (leer nota activa para el teclado)
     std::atomic<int> lastMidiNote{-1};
 
+    // Bitmask thread-safe: cada bit = una nota MIDI activa (física, no en release)
+    std::atomic<uint64_t> activeNoteBitsLow{0};  // notas 0–63
+    std::atomic<uint64_t> activeNoteBitsHigh{0}; // notas 64–127
+
+    // Inyecta MIDI desde la GUI (click en el teclado piano)
+    void addGuiMidiMessage(const juce::MidiMessage &msg);
+
 private:
+    juce::CriticalSection guiMidiLock;
+    juce::Array<juce::MidiMessage> guiMidiQueue;
     // =========================================================================
     // VOCES POLIFÓNICAS
     // =========================================================================

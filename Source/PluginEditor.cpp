@@ -234,6 +234,16 @@ FractalisAudioProcessorEditor::FractalisAudioProcessorEditor (FractalisAudioProc
     // =========================================================================
     addAndMakeVisible (pianoDisplay);
 
+    pianoDisplay.onNoteEvent = [this](int note, bool isOn)
+    {
+        if (isOn)
+            audioProcessor.addGuiMidiMessage (
+                juce::MidiMessage::noteOn  (1, note, (juce::uint8) 100));
+        else
+            audioProcessor.addGuiMidiMessage (
+                juce::MidiMessage::noteOff (1, note));
+    };
+
     startTimerHz (33);  // ~30ms: suficiente para animación fluida
     setSize (820, 680);
 }

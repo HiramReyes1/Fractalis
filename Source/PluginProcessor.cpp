@@ -219,6 +219,12 @@ SynthVoice* FractalisAudioProcessor::findFreeVoice() noexcept
     return steal;
 }
 
+void FractalisAudioProcessor::addGuiMidiMessage (const juce::MidiMessage& msg)
+{
+    juce::ScopedLock lock (guiMidiLock);
+    guiMidiQueue.add (msg);
+}
+
 // =============================================================================
 // PROCESS BLOCK
 //
@@ -235,6 +241,14 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                                             juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
+
+    // Volcar eventos MIDI generados por la GUI (teclado piano clickeable)
+    {
+        juce::ScopedLock lock (guiMidiLock);
+        for (const auto& msg : guiMidiQueue)
+            midiMessages.addEvent (msg, 0);
+        guiMidiQueue.clear();
+    }
 
     // -------------------------------------------------------------------------
     // 1. LEER PARÁMETROS BASE
@@ -456,6 +470,17 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         leftChannel [sample] = mixed;
         rightChannel[sample] = mixed;
     }
+
+    // Actualizar bitmask para que la GUI refleje qué notas están presionadas
+    uint64_t bitsLow = 0, bitsHigh = 0;
+    for (const auto& v : voices)
+    {
+        const int n = v.midiNote;
+        if      (n >= 0  && n < 64)  bitsLow  |= (1ULL << n);
+        else if (n >= 64 && n < 128) bitsHigh |= (1ULL << (n - 64));
+    }
+    activeNoteBitsLow.store  (bitsLow);
+    activeNoteBitsHigh.store (bitsHigh);
 }
 
 // =============================================================================

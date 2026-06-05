@@ -62,23 +62,74 @@ public:
 };
 
 // =============================================================================
-// PIANO KEYBOARD DISPLAY — sin cambios respecto a v0.1
+// PIANO KEYBOARD DISPLAY
 // =============================================================================
 class PianoKeyboardDisplay : public juce::Component
 {
 public:
+    // Callback: parámetros (midiNote, isNoteOn)
+    std::function<void(int, bool)> onNoteEvent;
+
     PianoKeyboardDisplay(int firstNote = 36, int lastNote = 71)
         : rangeStart(firstNote), rangeEnd(lastNote) {}
 
-    void setActiveNote(int midiNote)
+    void setActiveNotes(const std::array<bool, 128> &notes)
     {
-        if (activeNote != midiNote)
+        if (activeNotes != notes)
         {
-            activeNote = midiNote;
+            activeNotes = notes;
             repaint();
         }
     }
 
+    // ------------------------------------------------------------------
+    // Mouse — click y arrastre al estilo Serum
+    // ------------------------------------------------------------------
+    void mouseDown(const juce::MouseEvent &e) override
+    {
+        const int note = getNoteAt(e.position);
+        if (note >= 0)
+        {
+            currentDragNote = note;
+            if (onNoteEvent)
+                onNoteEvent(note, true);
+        }
+    }
+
+    void mouseDrag(const juce::MouseEvent &e) override
+    {
+        const int note = getNoteAt(e.position);
+        if (note != currentDragNote)
+        {
+            if (currentDragNote >= 0 && onNoteEvent)
+                onNoteEvent(currentDragNote, false);
+            currentDragNote = note;
+            if (note >= 0 && onNoteEvent)
+                onNoteEvent(note, true);
+        }
+    }
+
+    void mouseUp(const juce::MouseEvent &) override
+    {
+        if (currentDragNote >= 0 && onNoteEvent)
+        {
+            onNoteEvent(currentDragNote, false);
+            currentDragNote = -1;
+        }
+    }
+
+    void mouseExit(const juce::MouseEvent &) override
+    {
+        if (currentDragNote >= 0 && onNoteEvent)
+        {
+            onNoteEvent(currentDragNote, false);
+            currentDragNote = -1;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Paint — idéntico al original pero usando activeNotes[]
+    // ------------------------------------------------------------------
     void paint(juce::Graphics &g) override
     {
         const int numWhite = countWhiteKeys(rangeStart, rangeEnd);
@@ -99,7 +150,7 @@ public:
                 continue;
             const float x = whiteIdx * whiteW;
             juce::Rectangle<float> keyRect(x + 1.0f, 0.0f, whiteW - 2.0f, totalH - 1.0f);
-            const bool isActive = (note == activeNote);
+            const bool isActive = activeNotes[note];
 
             if (isActive)
             {
@@ -131,7 +182,7 @@ public:
             ++whiteIdx;
         }
 
-        // Paso 2: teclas negras (encima de las blancas)
+        // Paso 2: teclas negras
         whiteIdx = 0;
         for (int note = rangeStart; note <= rangeEnd; ++note)
         {
@@ -139,7 +190,7 @@ public:
             {
                 const float cx = (whiteIdx - 0.5f) * whiteW;
                 juce::Rectangle<float> blackRect(cx - blackW * 0.5f + 1.0f, 0.0f, blackW - 2.0f, blackH);
-                const bool isActive = (note == activeNote);
+                const bool isActive = activeNotes[note];
 
                 if (isActive)
                 {
@@ -169,7 +220,59 @@ public:
 
 private:
     int rangeStart, rangeEnd;
-    int activeNote = -1;
+    std::array<bool, 128> activeNotes{};
+    int currentDragNote = -1;
+
+    // Devuelve el MIDI note en la posición del cursor, o -1 si no hay ninguna.
+    // Las teclas negras tienen prioridad (están "encima" visualmente).
+    int getNoteAt(juce::Point<float> pos) const
+    {
+        const int numWhite = countWhiteKeys(rangeStart, rangeEnd);
+        if (numWhite == 0)
+            return -1;
+
+        const float totalW = (float)getWidth();
+        const float totalH = (float)getHeight();
+        const float whiteW = totalW / (float)numWhite;
+        const float blackW = whiteW * 0.58f;
+        const float blackH = totalH * 0.60f;
+
+        // --- Teclas negras primero ---
+        if (pos.y <= blackH)
+        {
+            int wIdx = 0;
+            for (int note = rangeStart; note <= rangeEnd; ++note)
+            {
+                if (isBlackKey(note))
+                {
+                    const float cx = (wIdx - 0.5f) * whiteW;
+                    const float left = cx - blackW * 0.5f + 1.0f;
+                    const float right = left + blackW - 2.0f;
+                    if (pos.x >= left && pos.x <= right)
+                        return note;
+                }
+                else
+                {
+                    ++wIdx;
+                }
+            }
+        }
+
+        // --- Teclas blancas ---
+        int wIdx = 0;
+        for (int note = rangeStart; note <= rangeEnd; ++note)
+        {
+            if (isBlackKey(note))
+                continue;
+            const float left = wIdx * whiteW + 1.0f;
+            const float right = left + whiteW - 2.0f;
+            if (pos.x >= left && pos.x <= right)
+                return note;
+            ++wIdx;
+        }
+
+        return -1;
+    }
 
     static bool isBlackKey(int note)
     {
@@ -204,7 +307,16 @@ private:
     FractalisLookAndFeel fractalisLookAndFeel;
     void timerCallback() override
     {
-        pianoDisplay.setActiveNote(audioProcessor.lastMidiNote.load());
+        const uint64_t bitsLow = audioProcessor.activeNoteBitsLow.load();
+        const uint64_t bitsHigh = audioProcessor.activeNoteBitsHigh.load();
+
+        std::array<bool, 128> held{};
+        for (int n = 0; n < 64; ++n)
+            held[n] = (bitsLow >> n) & 1ULL;
+        for (int n = 0; n < 64; ++n)
+            held[n + 64] = (bitsHigh >> n) & 1ULL;
+
+        pianoDisplay.setActiveNotes(held);
     }
 
     FractalisAudioProcessor &audioProcessor;
