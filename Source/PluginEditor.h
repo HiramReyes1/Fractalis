@@ -445,6 +445,98 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> filterModeAttachment;
 
     // =========================================================================
+    // CONTROL DE VISTA — alterna entre sintetizador y efectos FX
+    // =========================================================================
+    enum class EditorView { Synth, Fx };
+    EditorView currentView = EditorView::Synth;
+
+    // Pestanas de navegacion en el header (siempre visibles)
+    juce::TextButton viewSynthBtn;
+    juce::TextButton viewFxBtn;
+
+    // Listas de componentes por vista para control de visibilidad en bloque
+    std::vector<juce::Component*> synthComponents;
+    std::vector<juce::Component*> fxComponents;
+
+    // =========================================================================
+    // CONTROLES FX — paneles EQ, Compresor, Saturacion, Delay, Reverb
+    // =========================================================================
+
+    // --- EQ de 3 bandas ---
+    juce::Label        fxEqTitle;
+    juce::ToggleButton fxEqEnableBtn;
+    juce::Label  fxEqLowLabel;    juce::Slider fxEqLowSlider;
+    juce::Label  fxEqMidLabel;    juce::Slider fxEqMidSlider;
+    juce::Label  fxEqHighLabel;   juce::Slider fxEqHighSlider;
+
+    // --- Compresor ---
+    juce::Label        fxCompTitle;
+    juce::ToggleButton fxCompEnableBtn;
+    juce::Label  fxCompThreshLabel;  juce::Slider fxCompThreshSlider;
+    juce::Label  fxCompRatioLabel;   juce::Slider fxCompRatioSlider;
+    juce::Label  fxCompAttackLabel;  juce::Slider fxCompAttackSlider;
+    juce::Label  fxCompRelLabel;     juce::Slider fxCompRelSlider;
+    juce::Label  fxCompMakeupLabel;  juce::Slider fxCompMakeupSlider;
+
+    // --- Saturacion ---
+    juce::Label        fxSatTitle;
+    juce::ToggleButton fxSatEnableBtn;
+    juce::Label  fxSatDriveLabel;    juce::Slider fxSatDriveSlider;
+    juce::Label  fxSatMixLabel;      juce::Slider fxSatMixSlider;
+
+    // --- Delay ---
+    juce::Label        fxDelayTitle;
+    juce::ToggleButton fxDelayEnableBtn;
+    juce::Label  fxDelayTimeLabel;   juce::Slider fxDelayTimeSlider;
+    juce::Label  fxDelayFbLabel;     juce::Slider fxDelayFbSlider;
+    juce::Label  fxDelayMixLabel;    juce::Slider fxDelayMixSlider;
+
+    // --- Reverb ---
+    juce::Label        fxRevTitle;
+    juce::ToggleButton fxRevEnableBtn;
+    juce::Label  fxRevSizeLabel;     juce::Slider fxRevSizeSlider;
+    juce::Label  fxRevDampLabel;     juce::Slider fxRevDampSlider;
+    juce::Label  fxRevWidthLabel;    juce::Slider fxRevWidthSlider;
+    juce::Label  fxRevMixLabel;      juce::Slider fxRevMixSlider;
+
+    // =========================================================================
+    // ATTACHMENTS FX
+    // =========================================================================
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fxEqEnableAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxEqLowAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxEqMidAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxEqHighAttachment;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fxCompEnableAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxCompThreshAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxCompRatioAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxCompAttackAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxCompRelAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxCompMakeupAttachment;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fxSatEnableAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxSatDriveAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxSatMixAttachment;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fxDelayEnableAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxDelayTimeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxDelayFbAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxDelayMixAttachment;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> fxRevEnableAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxRevSizeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxRevDampAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxRevWidthAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> fxRevMixAttachment;
+
+    // =========================================================================
+    // HELPERS DE ESTILO (FX-especificos) Y GESTION DE VISTA
+    // =========================================================================
+    void setupEnableButton   (juce::ToggleButton&, const juce::String& text);
+    void setupFxTitle        (juce::Label&,        const juce::String& text);
+    void updateViewVisibility();
+
+    // =========================================================================
     // HELPERS DE ESTILO
     // =========================================================================
     void setupKnob(juce::Slider &, bool bipolar = false);

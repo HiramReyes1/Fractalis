@@ -229,6 +229,144 @@ private:
 };
 
 // =============================================================================
+// SIMPLE DELAY — linea de retardo estereo con retroalimentacion
+// Rango de tiempo: 0.01 s – 2.0 s. Pertenece a la cadena de efectos FX.
+// =============================================================================
+class SimpleDelay
+{
+public:
+    SimpleDelay() = default;
+
+    // Inicializa los buffers internos con el sample rate del host.
+    // Llamar desde prepareToPlay() antes del primer uso.
+    void prepare (double sampleRate) noexcept
+    {
+        sampleRateVal = sampleRate;
+        const int maxSamples = static_cast<int>(2.0 * sampleRate) + 64;
+        bufferL.assign (maxSamples, 0.0f);
+        bufferR.assign (maxSamples, 0.0f);
+        writePos = 0;
+    }
+
+    // Procesa numSamples estereo en los punteros left/right (in-place).
+    // delayTimeSec : retardo en segundos  (0.01 – 2.0)
+    // feedback     : retroalimentacion   (0.0 – 0.95)
+    // mix          : proporcion de senal retardada en la salida (0.0 – 1.0)
+    void process (float* left, float* right, int numSamples,
+                  float delayTimeSec, float feedback, float mix) noexcept
+    {
+        if (bufferL.empty()) return;
+        const int bufSize = static_cast<int>(bufferL.size());
+        const int delayN  = juce::jlimit (1, bufSize - 1,
+                            static_cast<int>(delayTimeSec * sampleRateVal));
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const int readPos = (writePos - delayN + bufSize) % bufSize;
+            const float dL = bufferL[readPos];
+            const float dR = bufferR[readPos];
+
+            // Grabar en el buffer: senal actual + retorno con feedback
+            bufferL[writePos] = left[i]  + dL * feedback;
+            bufferR[writePos] = right[i] + dR * feedback;
+
+            // Salida: senal seca + senal retardada escalada por mix
+            left[i]  += dL * mix;
+            right[i] += dR * mix;
+
+            writePos = (writePos + 1) % bufSize;
+        }
+    }
+
+    void reset() noexcept
+    {
+        std::fill (bufferL.begin(), bufferL.end(), 0.0f);
+        std::fill (bufferR.begin(), bufferR.end(), 0.0f);
+        writePos = 0;
+    }
+
+private:
+    double sampleRateVal = 44100.0;
+    std::vector<float> bufferL, bufferR;
+    int writePos = 0;
+};
+
+// =============================================================================
+// SIMPLE COMPRESSOR — compresor de pico con seguidor de envolvente logaritmico
+// Trabaja en dB internamente para mayor linealidad perceptual.
+// Crear una instancia por canal para procesado estereo independiente.
+// =============================================================================
+class SimpleCompressor
+{
+public:
+    SimpleCompressor() = default;
+
+    // Llamar desde prepareToPlay() con el sample rate del host.
+    void prepare (double sampleRate) noexcept
+    {
+        sampleRateVal = sampleRate;
+        updateCoefficients();
+    }
+
+    // Actualiza parametros. Llamar una vez por bloque si cambian los valores.
+    // thresholdDb : umbral de compresion en dB  (-60 a 0)
+    // ratio       : ratio de compresion (1 = sin compresion, 20 = limitador)
+    // attackMs    : tiempo de ataque en milisegundos
+    // releaseMs   : tiempo de recuperacion en milisegundos
+    // makeupDb    : ganancia de compensacion en dB aplicada a la salida
+    void setParameters (float thresholdDb, float ratio,
+                        float attackMs, float releaseMs,
+                        float makeupDb) noexcept
+    {
+        threshDb  = thresholdDb;
+        compRatio = juce::jmax (1.0f, ratio);
+        atkMs     = juce::jmax (0.1f, attackMs);
+        relMs     = juce::jmax (1.0f, releaseMs);
+        makeupLin = juce::Decibels::decibelsToGain (makeupDb);
+        updateCoefficients();
+    }
+
+    // Procesa una muestra y devuelve la salida comprimida + makeup gain.
+    float processSample (float input) noexcept
+    {
+        const float absIn = std::abs (input);
+        const float inDb  = absIn > 1e-7f
+                            ? juce::Decibels::gainToDecibels (absIn) : -140.0f;
+
+        // Seguidor de envolvente: rama attack si la senal sube, release si baja
+        envelope = (inDb > envelope)
+                   ? atk * envelope + (1.0f - atk) * inDb
+                   : rel * envelope + (1.0f - rel) * inDb;
+
+        // Reduccion de ganancia cuando la envolvente supera el umbral
+        const float gainDb = (envelope > threshDb)
+                             ? (envelope - threshDb) * (1.0f / compRatio - 1.0f)
+                             : 0.0f;
+
+        return input * juce::Decibels::decibelsToGain (gainDb) * makeupLin;
+    }
+
+    void reset() noexcept { envelope = -140.0f; }
+
+private:
+    void updateCoefficients() noexcept
+    {
+        atk = std::exp (-1.0f / static_cast<float>(atkMs * 0.001 * sampleRateVal));
+        rel = std::exp (-1.0f / static_cast<float>(relMs * 0.001 * sampleRateVal));
+    }
+
+    double sampleRateVal = 44100.0;
+    float  threshDb      = -20.0f;
+    float  compRatio     =   4.0f;
+    float  atkMs         =  10.0f;
+    float  relMs         = 100.0f;
+    float  makeupLin     =   1.0f;
+    float  atk           =   0.0f;
+    float  rel           =   0.0f;
+    float  envelope      = -140.0f;
+};
+
+// =============================================================================
 // SYNTH VOICE — estado completo de una voz polifónica
 // =============================================================================
 struct SynthVoice
@@ -350,6 +488,29 @@ private:
     float applyModulation(ModDestination dest, float baseValue, float modValue);
 
     double midiNoteToFrequency(int midiNote);
+
+    // =========================================================================
+    // CADENA DE EFECTOS (FX)
+    // Orden de aplicacion en processBlock:
+    //   EQ de 3 bandas -> Compresor -> Saturacion -> Delay -> Reverb
+    // =========================================================================
+
+    // EQ: un filtro IIR por banda (grave / medio / agudo) por canal (L y R)
+    juce::IIRFilter  eqLowL,  eqLowR;    // Shelving grave  — fc fija: 300 Hz
+    juce::IIRFilter  eqMidL,  eqMidR;    // Pico medio      — fc fija: 1 kHz
+    juce::IIRFilter  eqHighL, eqHighR;   // Shelving agudo  — fc fija: 5 kHz
+
+    // Compresor: canales izquierdo y derecho procesados independientemente
+    SimpleCompressor fxCompL, fxCompR;
+
+    // Delay estereo con retroalimentacion
+    SimpleDelay fxDelay;
+
+    // Reverb — juce::Reverb tiene API directa (no requiere ProcessSpec)
+    juce::Reverb fxReverb;
+
+    // Sample rate almacenado para recalcular coeficientes de EQ en processBlock
+    double currentSampleRate = 44100.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FractalisAudioProcessor)
 };

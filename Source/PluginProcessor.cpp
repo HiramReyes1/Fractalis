@@ -92,6 +92,61 @@ juce::AudioProcessorValueTreeState::ParameterLayout
     layout.add (std::make_unique<juce::AudioParameterChoice> ("modEnvDest", "ModEnv Dest",
         kModDestNames, 0));
 
+    // -------------------------------------------------------------------------
+    // FX — parametros de la cadena de efectos
+    // Cada efecto tiene un bool de activacion independiente.
+    // El orden de los parametros refleja el orden de la cadena de procesado.
+    // -------------------------------------------------------------------------
+
+    // EQ de 3 bandas: ganancia en dB con frecuencias fijas (300 Hz / 1 kHz / 5 kHz)
+    layout.add (std::make_unique<juce::AudioParameterBool>  ("fxEqEnabled",  "EQ Enable",    true));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxEqLowGain",  "EQ Low Gain",
+        juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxEqMidGain",  "EQ Mid Gain",
+        juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxEqHighGain", "EQ High Gain",
+        juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), 0.0f));
+
+    // Compresor — umbral, ratio, tiempos de envolvente y makeup gain
+    layout.add (std::make_unique<juce::AudioParameterBool>  ("fxCompEnabled",  "Comp Enable", false));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxCompThresh",   "Comp Threshold",
+        juce::NormalisableRange<float> (-60.0f, 0.0f, 0.5f), -20.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxCompRatio",    "Comp Ratio",
+        juce::NormalisableRange<float> (1.0f, 20.0f, 0.1f, 0.5f), 4.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxCompAttack",   "Comp Attack",
+        juce::NormalisableRange<float> (0.1f, 100.0f, 0.1f, 0.5f), 10.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxCompRelease",  "Comp Release",
+        juce::NormalisableRange<float> (10.0f, 1000.0f, 1.0f, 0.5f), 100.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxCompMakeup",   "Comp Makeup",
+        juce::NormalisableRange<float> (0.0f, 24.0f, 0.1f), 0.0f));
+
+    // Saturacion soft-clip (tanh): drive 0 = limpio, 1 = maxima saturacion
+    layout.add (std::make_unique<juce::AudioParameterBool>  ("fxSatEnabled", "Sat Enable", false));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxSatDrive",   "Sat Drive",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.3f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxSatMix",     "Sat Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f));
+
+    // Delay estereo
+    layout.add (std::make_unique<juce::AudioParameterBool>  ("fxDelayEnabled",  "Delay Enable", false));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxDelayTime",     "Delay Time",
+        juce::NormalisableRange<float> (0.01f, 2.0f, 0.01f, 0.4f), 0.25f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxDelayFeedback", "Delay Feedback",
+        juce::NormalisableRange<float> (0.0f, 0.95f, 0.01f), 0.4f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxDelayMix",      "Delay Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.3f));
+
+    // Reverb
+    layout.add (std::make_unique<juce::AudioParameterBool>  ("fxRevEnabled", "Reverb Enable", false));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxRevSize",    "Reverb Size",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxRevDamping", "Reverb Damping",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.5f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxRevWidth",   "Reverb Width",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 1.0f));
+    layout.add (std::make_unique<juce::AudioParameterFloat> ("fxRevMix",     "Reverb Mix",
+        juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.3f));
+
     return layout;
 }
 
@@ -125,6 +180,17 @@ void FractalisAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBl
     filter.setSampleRate (sampleRate);
     filter.reset();
     lfoPhase = 0.0;
+
+    // Inicializar cadena de FX con el nuevo sample rate
+    currentSampleRate = sampleRate;
+    eqLowL.reset();  eqLowR.reset();
+    eqMidL.reset();  eqMidR.reset();
+    eqHighL.reset(); eqHighR.reset();
+    fxCompL.prepare (sampleRate);
+    fxCompR.prepare (sampleRate);
+    fxDelay.prepare (sampleRate);
+    fxReverb.setSampleRate (sampleRate);
+    fxReverb.reset();
 }
 
 void FractalisAudioProcessor::releaseResources() {}
@@ -469,6 +535,103 @@ void FractalisAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
         leftChannel [sample] = mixed;
         rightChannel[sample] = mixed;
+    }
+
+    // -------------------------------------------------------------------------
+    // FX CHAIN — aplicar efectos sobre el buffer estereo mezclado
+    // Orden: EQ -> Compresor -> Saturacion -> Delay -> Reverb
+    // Cada efecto se salta completamente si su parametro de activacion esta off.
+    // -------------------------------------------------------------------------
+
+    // --- EQ de 3 bandas ---
+    // gainFactor en makeLowShelf / makePeakFilter / makeHighShelf es LINEAL,
+    // no en dB, por eso se usa decibelsToGain() antes de pasarlo.
+    if (apvts.getRawParameterValue ("fxEqEnabled")->load() > 0.5f)
+    {
+        const float lowGain  = apvts.getRawParameterValue ("fxEqLowGain") ->load();
+        const float midGain  = apvts.getRawParameterValue ("fxEqMidGain") ->load();
+        const float highGain = apvts.getRawParameterValue ("fxEqHighGain")->load();
+
+        eqLowL.setCoefficients  (juce::IIRCoefficients::makeLowShelf (
+            currentSampleRate, 300.0,  0.707, juce::Decibels::decibelsToGain (lowGain)));
+        eqLowR.setCoefficients  (juce::IIRCoefficients::makeLowShelf (
+            currentSampleRate, 300.0,  0.707, juce::Decibels::decibelsToGain (lowGain)));
+        eqMidL.setCoefficients  (juce::IIRCoefficients::makePeakFilter (
+            currentSampleRate, 1000.0, 1.0,   juce::Decibels::decibelsToGain (midGain)));
+        eqMidR.setCoefficients  (juce::IIRCoefficients::makePeakFilter (
+            currentSampleRate, 1000.0, 1.0,   juce::Decibels::decibelsToGain (midGain)));
+        eqHighL.setCoefficients (juce::IIRCoefficients::makeHighShelf (
+            currentSampleRate, 5000.0, 0.707, juce::Decibels::decibelsToGain (highGain)));
+        eqHighR.setCoefficients (juce::IIRCoefficients::makeHighShelf (
+            currentSampleRate, 5000.0, 0.707, juce::Decibels::decibelsToGain (highGain)));
+
+        // Cascada in-place: grave -> medio -> agudo sobre cada canal
+        eqLowL.processSamples  (leftChannel,  numSamples);
+        eqMidL.processSamples  (leftChannel,  numSamples);
+        eqHighL.processSamples (leftChannel,  numSamples);
+        eqLowR.processSamples  (rightChannel, numSamples);
+        eqMidR.processSamples  (rightChannel, numSamples);
+        eqHighR.processSamples (rightChannel, numSamples);
+    }
+
+    // --- Compresor estereo (canales L/R independientes) ---
+    if (apvts.getRawParameterValue ("fxCompEnabled")->load() > 0.5f)
+    {
+        const float thresh = apvts.getRawParameterValue ("fxCompThresh")  ->load();
+        const float ratio  = apvts.getRawParameterValue ("fxCompRatio")   ->load();
+        const float atk    = apvts.getRawParameterValue ("fxCompAttack")  ->load();
+        const float rel    = apvts.getRawParameterValue ("fxCompRelease") ->load();
+        const float mkup   = apvts.getRawParameterValue ("fxCompMakeup")  ->load();
+
+        fxCompL.setParameters (thresh, ratio, atk, rel, mkup);
+        fxCompR.setParameters (thresh, ratio, atk, rel, mkup);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            leftChannel[i]  = fxCompL.processSample (leftChannel[i]);
+            rightChannel[i] = fxCompR.processSample (rightChannel[i]);
+        }
+    }
+
+    // --- Saturacion soft-clip (tanh) ---
+    // preGain escala de 1x (drive=0, limpio) a 10x (drive=1, saturacion maxima).
+    // La division posterior por preGain compensa el nivel de salida aproximado.
+    if (apvts.getRawParameterValue ("fxSatEnabled")->load() > 0.5f)
+    {
+        const float drive   = apvts.getRawParameterValue ("fxSatDrive")->load();
+        const float satMix  = apvts.getRawParameterValue ("fxSatMix")  ->load();
+        const float preGain = 1.0f + drive * 9.0f;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float satL = std::tanh (leftChannel[i]  * preGain) / preGain;
+            const float satR = std::tanh (rightChannel[i] * preGain) / preGain;
+            leftChannel[i]  = leftChannel[i]  * (1.0f - satMix) + satL * satMix;
+            rightChannel[i] = rightChannel[i] * (1.0f - satMix) + satR * satMix;
+        }
+    }
+
+    // --- Delay estereo ---
+    if (apvts.getRawParameterValue ("fxDelayEnabled")->load() > 0.5f)
+    {
+        fxDelay.process (leftChannel, rightChannel, numSamples,
+                         apvts.getRawParameterValue ("fxDelayTime")    ->load(),
+                         apvts.getRawParameterValue ("fxDelayFeedback")->load(),
+                         apvts.getRawParameterValue ("fxDelayMix")     ->load());
+    }
+
+    // --- Reverb ---
+    if (apvts.getRawParameterValue ("fxRevEnabled")->load() > 0.5f)
+    {
+        juce::Reverb::Parameters rp;
+        rp.roomSize   = apvts.getRawParameterValue ("fxRevSize")   ->load();
+        rp.damping    = apvts.getRawParameterValue ("fxRevDamping")->load();
+        rp.width      = apvts.getRawParameterValue ("fxRevWidth")  ->load();
+        rp.wetLevel   = apvts.getRawParameterValue ("fxRevMix")    ->load();
+        rp.dryLevel   = 1.0f - rp.wetLevel;
+        rp.freezeMode = 0.0f;
+        fxReverb.setParameters (rp);
+        fxReverb.processStereo (leftChannel, rightChannel, numSamples);
     }
 
     // Actualizar bitmask para que la GUI refleje qué notas están presionadas
